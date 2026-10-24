@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { BarChart3, Bot, History, Settings, Sparkles } from 'lucide-react';
 import { api } from '../lib/api';
-import type { GroupRecord, MeResponse, QuizSummary } from '../types';
+import { can } from '../lib/perms';
+import type { GroupView, HelperPerm, MeResponse, QuizSummary } from '../types';
 import { ErrorBox, Spinner, TelegramGate, useToast } from '../components/ui';
 import { DashboardPage } from '../pages/DashboardPage';
 import { QuizCreatorPage } from '../pages/QuizCreatorPage';
@@ -10,12 +11,12 @@ import { StatsPage } from '../pages/StatsPage';
 import { SettingsPage } from '../pages/SettingsPage';
 
 type Tab = 'home' | 'new' | 'history' | 'stats' | 'settings';
-const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
-  { id: 'home', label: 'Bosh sahifa', icon: Bot },
-  { id: 'new', label: 'Yangi quiz', icon: Sparkles },
-  { id: 'history', label: 'Tarix', icon: History },
-  { id: 'stats', label: 'Statistika', icon: BarChart3 },
-  { id: 'settings', label: 'Sozlamalar', icon: Settings },
+const TABS: { id: Tab; label: string; icon: React.ElementType; show: (g: GroupView) => boolean }[] = [
+  { id: 'home', label: 'Bosh sahifa', icon: Bot, show: () => true },
+  { id: 'new', label: 'Yangi quiz', icon: Sparkles, show: g => can(g, 'quiz') },
+  { id: 'history', label: 'Tarix', icon: History, show: g => can(g, 'quiz') },
+  { id: 'stats', label: 'Statistika', icon: BarChart3, show: g => can(g, 'stats') },
+  { id: 'settings', label: 'Sozlamalar', icon: Settings, show: g => g.access.role === 'admin' || (['settings', 'moderation', 'certificate'] as HelperPerm[]).some(p => can(g, p)) },
 ];
 
 export function AdminApp() {
@@ -75,14 +76,16 @@ function Panel() {
   if (me.groups.length === 0) return <Onboarding botUsername={me.botUsername} />;
 
   const group = me.groups.find(g => g.id === groupId) || me.groups[0];
-  const updateGroup = (g: GroupRecord) => setMe({ ...me, groups: me.groups.map(x => (x.id === g.id ? g : x)) });
+  const updateGroup = (g: GroupView) => setMe({ ...me, groups: me.groups.map(x => (x.id === g.id ? g : x)) });
+  const tabs = TABS.filter(t => t.show(group));
+  const activeTab: Tab = tabs.some(t => t.id === tab) ? tab : 'home';
 
   return (
     <div className="min-h-screen flex flex-col max-w-3xl mx-auto">
       <header className="sticky top-0 z-30 bg-slate-950/95 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="font-extrabold text-sm text-white truncate">{group.title}</h1>
-          <p className="text-[11px] text-slate-400">{group.memberCount.toLocaleString()} a'zo</p>
+          <p className="text-[11px] text-slate-400">{group.memberCount.toLocaleString()} a'zo{group.access.role === 'helper' ? " · Yordamchi admin" : ''}</p>
         </div>
         {me.groups.length > 1 && (
           <select
@@ -98,8 +101,8 @@ function Panel() {
       </header>
 
       <main className="flex-1 p-4 pb-28 space-y-4">
-        {tab === 'home' && <DashboardPage group={group} quizzes={quizzes} onNavigate={t => setTab(t as Tab)} onChanged={() => loadQuizzes(group.id)} toast={toast.show} />}
-        {tab === 'new' && (
+        {activeTab === 'home' && <DashboardPage group={group} quizzes={quizzes} onNavigate={t => setTab(t as Tab)} onChanged={() => loadQuizzes(group.id)} toast={toast.show} />}
+        {activeTab === 'new' && (
           <QuizCreatorPage
             group={group}
             onDone={() => {
@@ -110,16 +113,16 @@ function Panel() {
             toast={toast.show}
           />
         )}
-        {tab === 'history' && <QuizHistoryPage quizzes={quizzes} onChanged={() => loadQuizzes(group.id)} toast={toast.show} />}
-        {tab === 'stats' && <StatsPage group={group} />}
-        {tab === 'settings' && <SettingsPage group={group} onSaved={updateGroup} toast={toast.show} />}
+        {activeTab === 'history' && <QuizHistoryPage group={group} quizzes={quizzes} onChanged={() => loadQuizzes(group.id)} toast={toast.show} />}
+        {activeTab === 'stats' && <StatsPage group={group} />}
+        {activeTab === 'settings' && <SettingsPage group={group} onSaved={updateGroup} toast={toast.show} />}
       </main>
 
       <nav className="fixed bottom-0 inset-x-0 z-40 bg-slate-950/95 backdrop-blur border-t border-slate-800" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        <div className="max-w-3xl mx-auto grid grid-cols-5">
-          {TABS.map(t => {
+        <div className="max-w-3xl mx-auto grid" style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}>
+          {tabs.map(t => {
             const Icon = t.icon;
-            const active = tab === t.id;
+            const active = activeTab === t.id;
             return (
               <button key={t.id} onClick={() => setTab(t.id)} className={`py-2.5 flex flex-col items-center gap-0.5 text-[10px] font-semibold cursor-pointer ${active ? 'text-sky-400' : 'text-slate-500'}`}>
                 <Icon className="w-5 h-5" />

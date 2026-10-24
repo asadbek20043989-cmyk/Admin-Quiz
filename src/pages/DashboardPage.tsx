@@ -2,11 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Award, CalendarClock, Play, Sparkles, Square, Users } from 'lucide-react';
 import { api } from '../lib/api';
 import { confirmAction } from '../lib/tg';
-import type { BotHealth, GroupRecord, QuizSummary } from '../types';
+import type { BotHealth, GroupView, QuizSummary } from '../types';
+import { can } from '../lib/perms';
 import { Badge, Btn, Card, Empty, fmtDate } from '../components/ui';
 
 interface Props {
-  group: GroupRecord;
+  group: GroupView;
   quizzes: QuizSummary[];
   onNavigate: (tab: string) => void;
   onChanged: () => void;
@@ -63,7 +64,7 @@ export const DashboardPage: React.FC<Props> = ({ group, quizzes, onNavigate, onC
         <Card className="!p-3"><Award className="w-4 h-4 text-emerald-400 mb-1" /><div className="text-lg font-extrabold">{p.certMonthlyUsed}/{p.certMonthlyQuota}</div><div className="text-[10px] text-slate-400">Sertifikat (oy)</div></Card>
       </div>
 
-      {runningQuiz && (
+      {runningQuiz && can(group, 'quiz') && (
         <Card className="!border-emerald-600/50 space-y-2">
           <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" /><b className="text-sm text-emerald-300">Quiz davom etmoqda</b></div>
           <div className="text-sm text-slate-200">{runningQuiz.topic} · {runningQuiz.questionCount} ta savol</div>
@@ -71,10 +72,14 @@ export const DashboardPage: React.FC<Props> = ({ group, quizzes, onNavigate, onC
         </Card>
       )}
 
-      <div className="grid grid-cols-2 gap-2.5">
-        <Btn tone="primary" onClick={() => onNavigate('new')} className="py-3.5"><Play className="w-4 h-4" /> Yangi quiz</Btn>
-        <Btn onClick={() => onNavigate('history')} className="py-3.5">Tarix va natijalar</Btn>
-      </div>
+      {can(group, 'quiz') ? (
+        <div className="grid grid-cols-2 gap-2.5">
+          <Btn tone="primary" onClick={() => onNavigate('new')} className="py-3.5"><Play className="w-4 h-4" /> Yangi quiz</Btn>
+          <Btn onClick={() => onNavigate('history')} className="py-3.5">Tarix va natijalar</Btn>
+        </div>
+      ) : (
+        <div className="p-3.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-400">Siz yordamchi adminsiz. Mavjud bo'limlar pastdagi menyuda ko'rinadi.</div>
+      )}
 
       <Card className="space-y-1.5">
         <div className="flex items-center gap-2 text-xs font-bold text-slate-300"><CalendarClock className="w-4 h-4 text-sky-400" /> Keyingi rejalashtirilgan quiz</div>

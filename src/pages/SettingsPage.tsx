@@ -1,30 +1,38 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import type { BotHealth, CertificateTemplate, GroupRecord, ModerationLog } from '../types';
+import type { BotHealth, CertificateTemplate, GroupView, ModerationLog } from '../types';
+import { can } from '../lib/perms';
+import { HelpersTab } from './HelpersTab';
 import { Badge, Btn, Card, Empty, ErrorBox, Field, Spinner, Toggle, fmtDate, inputCls } from '../components/ui';
 import { CertificateCanvas } from '../components/CertificateCanvas';
 
-type Sub = 'group' | 'moderation' | 'cert' | 'ads';
+type Sub = 'group' | 'moderation' | 'cert' | 'helpers';
 interface Props {
-  group: GroupRecord;
-  onSaved: (g: GroupRecord) => void;
+  group: GroupView;
+  onSaved: (g: GroupView) => void;
   toast: (m: string, ok?: boolean) => void;
 }
 
 export const SettingsPage: React.FC<Props> = ({ group, onSaved, toast }) => {
-  const [sub, setSub] = useState<Sub>('group');
-  const tabs: [Sub, string][] = [['group', 'Guruh'], ['moderation', 'Moderatsiya'], ['cert', 'Sertifikat'], ['ads', 'Reklama']];
+  const tabs = ([
+    ['group', 'Guruh', can(group, 'settings')],
+    ['moderation', 'Moderatsiya', can(group, 'moderation')],
+    ['cert', 'Sertifikat', can(group, 'certificate')],
+    ['helpers', 'Yordamchilar', group.access.role === 'admin'],
+  ] as [Sub, string, boolean][]).filter(t => t[2]);
+  const [sub, setSub] = useState<Sub>(tabs[0]?.[0] || 'group');
+  const current = tabs.some(t => t[0] === sub) ? sub : tabs[0]?.[0];
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-4 gap-1 bg-slate-900 border border-slate-800 p-1 rounded-xl">
+      <div className="grid gap-1 bg-slate-900 border border-slate-800 p-1 rounded-xl" style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}>
         {tabs.map(([id, label]) => (
-          <button key={id} onClick={() => setSub(id)} className={`py-2 rounded-lg text-xs font-semibold cursor-pointer ${sub === id ? 'bg-sky-500 text-white' : 'text-slate-400'}`}>{label}</button>
+          <button key={id} onClick={() => setSub(id)} className={`py-2 rounded-lg text-xs font-semibold cursor-pointer ${current === id ? 'bg-sky-500 text-white' : 'text-slate-400'}`}>{label}</button>
         ))}
       </div>
-      {sub === 'group' && <GroupTab group={group} onSaved={onSaved} toast={toast} />}
-      {sub === 'moderation' && <ModerationTab group={group} onSaved={onSaved} toast={toast} />}
-      {sub === 'cert' && <CertTab group={group} onSaved={onSaved} toast={toast} />}
-      {sub === 'ads' && <AdsTab group={group} toast={toast} />}
+      {current === 'group' && <GroupTab group={group} onSaved={onSaved} toast={toast} />}
+      {current === 'moderation' && <ModerationTab group={group} onSaved={onSaved} toast={toast} />}
+      {current === 'cert' && <CertTab group={group} onSaved={onSaved} toast={toast} />}
+      {current === 'helpers' && <HelpersTab group={group} toast={toast} />}
     </div>
   );
 };
@@ -34,7 +42,18 @@ type TabProps = Props;
 const GroupTab: React.FC<TabProps> = ({ group, onSaved, toast }) => {
   const [s, setS] = useState(group.settings);
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
   useEffect(() => setS(group.settings), [group.id]);
+  const sendTest = async () => {
+    setTesting(true);
+    try {
+      await api.welcomeTest(group.id);
+      toast('Sinov xabari guruhga yuborildi');
+    } catch (e: any) {
+      toast(e.message, false);
+    }
+    setTesting(false);
+  };
   const save = async () => {
     setBusy(true);
     try {
@@ -51,13 +70,15 @@ const GroupTab: React.FC<TabProps> = ({ group, onSaved, toast }) => {
       <Toggle checked={s.autoApproveJoin} onChange={v => setS({ ...s, autoApproveJoin: v })} label="Qo'shilish so'rovlarini avto-tasdiqlash" hint="Guruh 'so'rov bilan qo'shilish' rejimida bo'lsa" />
       <Toggle checked={s.welcomeEnabled} onChange={v => setS({ ...s, welcomeEnabled: v })} label="Salomlashish xabari" hint="Yangi a'zolarga guruhda salom yuboradi" />
       <Toggle checked={s.explainEnabled} onChange={v => setS({ ...s, explainEnabled: v })} label="/explain buyrug'i" hint="Xabarga javob tarzida grammatik tushuntirish (AI)" />
-      <Field label="Salomlashish matni" hint="{name} — a'zo ismi, {group} — guruh nomi">
+      <Field label="Salomlashish matni" hint="{name} — a'zo ismi (tag qilinadi), {group} — guruh nomi. {name} yozilmasa ham a'zo ismi avtomatik tag qilinadi.">
         <textarea rows={3} maxLength={1000} className={inputCls} value={s.welcomeMessage} onChange={e => setS({ ...s, welcomeMessage: e.target.value })} />
       </Field>
       <Field label="Guruh qoidalari">
         <textarea rows={4} maxLength={2000} className={inputCls} value={s.rules} onChange={e => setS({ ...s, rules: e.target.value })} />
       </Field>
       <Btn tone="primary" busy={busy} onClick={save} className="w-full">Saqlash</Btn>
+      <Btn busy={testing} onClick={sendTest} className="w-full">👋 Salomlashishni sinab ko'rish (guruhga yuboriladi)</Btn>
+      <p className="text-[11px] text-slate-500">Salom ishlashi uchun bot guruhda admin bo'lishi kerak. Avval «Saqlash» ni bosing, so'ng sinab ko'ring.</p>
     </Card>
   );
 };
@@ -162,49 +183,6 @@ const CertTab: React.FC<TabProps> = ({ group, onSaved, toast }) => {
       <Card className="space-y-2">
         <h3 className="text-sm font-bold">Ko'rinish (namuna)</h3>
         <CertificateCanvas templateId={c.templateId} recipientName="Aziza Karimova" rank={1} score={5} totalQuestions={5} topic="Present Perfect" groupTitle={group.title} date={today} signatoryTitle={c.signatoryTitle} signatoryName={c.signatoryName} certId="QZ-NAMUNA01" width={800} height={560} showDownloadBtn={false} />
-      </Card>
-    </div>
-  );
-};
-
-const AdsTab: React.FC<{ group: GroupRecord; toast: Props['toast'] }> = ({ group, toast }) => {
-  const [d, setD] = useState<Awaited<ReturnType<typeof api.ads>> | null>(null);
-  const [freq, setFreq] = useState(0);
-  const [error, setError] = useState('');
-  useEffect(() => {
-    api.ads(group.id).then(r => { setD(r); setFreq(r.adFrequencyPerWeek); }).catch(e => setError(e.message));
-  }, [group.id]);
-  if (error) return <ErrorBox message={error} />;
-  if (!d) return <Spinner />;
-  const save = async () => {
-    try {
-      await api.setAdFrequency(group.id, freq);
-      toast('Reklama chastotasi saqlandi');
-    } catch (e: any) {
-      toast(e.message, false);
-    }
-  };
-  return (
-    <div className="space-y-4">
-      <Card className="space-y-3">
-        <p className="text-xs text-slate-400">Hamkor reklamalar har doim «Hamkor reklama» belgisi bilan, quiz natijalaridan keyin e'lon qilinadi. Kuniga ko'pi bilan 1 ta.</p>
-        {d.adFree ? <Badge tone="emerald">Sizning guruhingiz reklamasiz tarifda</Badge> : d.adMinPerWeek === d.adMaxPerWeek ? (
-          <div className="text-sm">Haftasiga <b>{d.adMinPerWeek}</b> ta (qat'iy)</div>
-        ) : (
-          <>
-            <Field label={`Haftasiga reklama soni: ${freq}`} hint={`Ruxsat etilgan oraliq: ${d.adMinPerWeek}–${d.adMaxPerWeek}`}>
-              <input type="range" min={d.adMinPerWeek} max={d.adMaxPerWeek} value={freq} onChange={e => setFreq(Number(e.target.value))} className="w-full accent-sky-500" />
-            </Field>
-            <Btn tone="primary" onClick={save} className="w-full">Saqlash</Btn>
-          </>
-        )}
-        <div className="text-[11px] text-slate-500">So'nggi 7 kunda joylangan: {d.postedLastWeek} ta</div>
-      </Card>
-      <Card className="space-y-2">
-        <h3 className="text-sm font-bold">Faol hamkor reklamalar</h3>
-        {d.ads.length === 0 ? <Empty text="Hozircha faol reklama yo'q." /> : d.ads.map(a => (
-          <div key={a.id} className="text-xs border-b border-slate-800 pb-2 last:border-0"><b className="text-slate-200">{a.title}</b><div className="text-slate-400">{a.text}</div></div>
-        ))}
       </Card>
     </div>
   );

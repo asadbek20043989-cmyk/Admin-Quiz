@@ -41,6 +41,38 @@ export interface CertificateSettings {
   signatoryName: string;
 }
 
+// Yordamchi adminlar uchun vakolatlar (guruh egasi ularni o'zi belgilaydi).
+export type HelperPerm = 'quiz' | 'deleteQuiz' | 'settings' | 'moderation' | 'certificate' | 'stats';
+export const HELPER_PERMS: { id: HelperPerm; label: string; hint: string }[] = [
+  { id: 'quiz', label: 'Quiz boshqaruvi', hint: 'Yaratish, AI bilan tuzish, yuborish, qayta boshlash, to\'xtatish, tarixni ko\'rish' },
+  { id: 'deleteQuiz', label: "Quizlarni o'chirish", hint: "Tarixdagi quizlarni o'chira oladi" },
+  { id: 'settings', label: 'Guruh sozlamalari', hint: "Salomlashish xabari, qoidalar, qo'shilish so'rovlari, /explain" },
+  { id: 'moderation', label: 'Moderatsiya', hint: "Anti-spam, taqiqlangan so'zlar, moderatsiya jurnali" },
+  { id: 'certificate', label: 'Sertifikat sozlamalari', hint: "Shablon, g'oliblar soni, imzo" },
+  { id: 'stats', label: "Statistikani ko'rish", hint: "Guruh statistikasi" },
+];
+export const MAX_HELPERS = 10;
+
+export interface HelperAdmin {
+  userId: string;
+  name: string;
+  username?: string;
+  perms: HelperPerm[];
+  addedAt: string;
+}
+
+export interface HelperInvite {
+  code: string;
+  perms: HelperPerm[];
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface GroupAccess {
+  role: 'admin' | 'helper';
+  perms: HelperPerm[]; // admin uchun barcha vakolatlar
+}
+
 export interface GroupRecord {
   id: string; // = Telegram chat id as string
   tgChatId: string;
@@ -56,6 +88,7 @@ export interface GroupRecord {
   linkedAt: string;
   adminId: string;
   adminName: string;
+  helpers?: HelperAdmin[];
   adminCheckedAt?: string;
   runningQuizId?: string;
   lastAdAt?: string;
@@ -210,9 +243,12 @@ export interface PublicCertificate {
   certId: string;
 }
 
+// Guruh + joriy foydalanuvchining shu guruhdagi huquqi (serverda hisoblanadi).
+export type GroupView = GroupRecord & { access: GroupAccess };
+
 export interface MeResponse {
   user: TgUser;
   isOwner: boolean;
-  groups: GroupRecord[];
+  groups: GroupView[];
   botUsername: string;
 }

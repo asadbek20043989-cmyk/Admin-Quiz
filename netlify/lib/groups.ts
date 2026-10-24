@@ -86,16 +86,31 @@ export async function refreshMemberCount(g: GroupRecord): Promise<void> {
   }
 }
 
-// Move a group record when Telegram migrates a group to a supergroup (chat id changes).
+// Telegram guruhni supergroup'ga o'tkazganda chat id o'zgaradi. Guruh, uning quizlari, adminlari
+// (yordamchilar ham) va statistikasi yangi id ostiga ko'chiriladi, eski id esa yangisiga yo'naltiriladi.
 export async function migrateGroup(oldId: string, newId: string) {
+  const { getJSON, setJSON, setText, del } = await import('./db.ts');
   const g = await getGroup(oldId);
   if (!g) return;
   const moved = { ...g, id: newId, tgChatId: newId };
   await saveGroup(moved);
-  const { getJSON, setJSON, del } = await import('./db.ts');
-  const ids = (await getJSON<string[]>(`ug/${g.adminId}`)) || [];
-  await setJSON(`ug/${g.adminId}`, ids.map(i => (i === oldId ? newId : i)));
-  const quizzes = await getJSON<any[]>(`gq/${oldId}`);
-  if (quizzes) await setJSON(`gq/${newId}`, quizzes);
+  await setText(`mig/${oldId}`, newId);
+
+  const members = [g.adminId, ...(g.helpers || []).map(h => h.userId)];
+  for (const uid of new Set(members)) {
+    const ids = (await getJSON<string[]>(`ug/${uid}`)) || [];
+    await setJSON(`ug/${uid}`, [...new Set(ids.map(i => (i === oldId ? newId : i)))]);
+  }
+
+  const summaries = await getJSON<any[]>(`gq/${oldId}`);
+  if (summaries) {
+    await setJSON(`gq/${newId}`, summaries);
+    for (const sm of summaries) {
+      const q = await getJSON<any>(`q/${sm.id}`);
+      if (q && q.groupId === oldId) await setJSON(`q/${q.id}`, { ...q, groupId: newId });
+    }
+  }
+  const stats = await getJSON<any>(`stats/${oldId}`);
+  if (stats) await setJSON(`stats/${newId}`, stats);
   await del(`g/${oldId}`);
 }

@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto';
 import type { AdminCodeRecord, ModerationLog } from '../../src/types/index.ts';
 import { CODE_PEPPER, esc, isOwnerId, SUPER_ADMIN_IDS, uid } from './config.ts';
-import { addGroupToAdmin, audit, getGroup, getJSON, groupsOfAdmin, saveGroup, setJSON, setText } from './db.ts';
+import { addGroupToAdmin, audit, getGroup, getJSON, groupsOfAdmin, removeGroupFromUser, saveGroup, setJSON, setText } from './db.ts';
 import { botId, botUsername, isChatAdmin, sendMessage, tg } from './tg.ts';
 import { newGroup, migrateGroup } from './groups.ts';
 import { onPollClosed, recordAnswer, reviewText, stopQuiz } from './quizEngine.ts';
 import { explainGrammar } from './ai.ts';
 import { siteUrl } from './ads.ts';
 import { displayName } from './auth.ts';
+import { accessOf } from './access.ts';
+import { redeemInvite } from './helpers.ts';
 
 export const hashCode = (code: string) => createHash('sha256').update(CODE_PEPPER() + code.trim().toUpperCase()).digest('hex');
 
@@ -42,9 +44,10 @@ export async function handleUpdate(u: any): Promise<void> {
     if (u.poll.is_closed) await onPollClosed(u.poll.id);
     return;
   }
-  if (u.chat_join_request) return onJoinRequest(u.chat_join_request);
-  if (u.my_chat_member) return onMyChatMember(u.my_chat_member);
-  if (u.message) return onMessage(u.message);
+  if (u.chat_join_request) await onJoinRequest(u.chat_join_request);
+  else if (u.my_chat_member) await onMyChatMember(u.my_chat_member);
+  else if (u.chat_member) await onChatMember(u.chat_member);
+  else if (u.message) await onMessage(u.message);
 }
 
 // ------------------------------------------------------------------ messages
@@ -118,6 +121,12 @@ async function onPrivateCommand(m: any, text: string) {
     if (arg.startsWith('review_')) {
       return sendMessage(chatId, await reviewText(arg.slice(7), String(from.id)));
     }
+    if (arg.startsWith('helper_')) {
+      const r = await redeemInvite(arg.slice(7), from);
+      if (!r.ok || !r.group) return sendMessage(chatId, `❌ ${esc(r.error || 'Xatolik')}`);
+      await sendMessage(r.group.adminId, `🤝 <b>${esc(displayName(from))}</b> «${esc(r.group.title)}» guruhiga yordamchi admin bo'ldi.`).catch(() => {});
+      return openPanelButton(chatId, `✅ Siz «<b>${esc(r.group.title)}</b>» guruhiga yordamchi admin bo'ldingiz. Sizga berilgan vakolatlar panelda ko'rinadi.`, '/', '📱 Panelni ochish');
+    }
     if (/^QZ-/i.test(arg)) {
       return sendMessage(chatId, "Kod qabul qilindi, lekin ulash uchun uni <b>guruhingizda</b> yuboring:\n1) Botni guruhga qo'shing va admin qiling\n2) Guruhda yozing: <code>/link " + esc(arg.toUpperCase()) + "</code>");
     }
@@ -161,6 +170,10 @@ async function onLink(m: any, codeArg: string) {
 
   const existing = await getGroup(String(chat.id));
   if (existing && existing.status !== 'inactive') return reply("Bu guruh allaqachon ulangan.");
+  if (existing) {
+    // Guruh qayta ulanmoqda: eski admin va yordamchilarning kirish huquqi tozalanadi.
+    for (const uid of new Set([existing.adminId, ...(existing.helpers || []).map(h => h.userId)])) await removeGroupFromUser(uid, existing.id);
+  }
 
   const count = await tg<number>('getChatMemberCount', { chat_id: chat.id });
   const group = newGroup({
@@ -189,7 +202,8 @@ async function onLink(m: any, codeArg: string) {
 async function onStopCmd(m: any) {
   const g = await getGroup(String(m.chat.id));
   if (!g || !g.runningQuizId) return;
-  if (!(await isChatAdmin(m.chat.id, m.from.id))) return;
+  const helper = accessOf(g, m.from.id)?.perms.includes('quiz');
+  if (!helper && !(await isChatAdmin(m.chat.id, m.from.id))) return;
   await stopQuiz(g.runningQuizId);
 }
 
@@ -207,24 +221,63 @@ async function onExplain(m: any, arg: string) {
 }
 
 // ------------------------------------------------------------------ membership
+// Bir xil a'zoga ikki marta salom bermaslik uchun (service xabar + chat_member + join_request bir vaqtda kelishi mumkin).
+const welcomed = new Map<string, number>();
+async function alreadyWelcomed(chatId: string, userId: string | number): Promise<boolean> {
+  const key = `${chatId}:${userId}`;
+  const now = Date.now();
+  for (const [k, t] of welcomed) if (now - t > 5 * 60 * 1000) welcomed.delete(k);
+  if (welcomed.has(key)) return true;
+  welcomed.set(key, now);
+  const k = `wl/${chatId}/${userId}`;
+  const last = Number(await getJSON<number>(k)) || 0;
+  if (now - last < 2 * 60 * 1000) return true;
+  await setJSON(k, now);
+  return false;
+}
+
+async function greet(chatId: string | number, user: any) {
+  if (!user || user.is_bot) return;
+  // Sozlamalar keshsiz, to'g'ridan-to'g'ri o'qiladi: admin salomlashishni yoqishi bilan darhol ishlaydi.
+  const g = await getGroup(String(chatId));
+  if (!g || g.status !== 'active' || !g.settings.welcomeEnabled) return;
+  if (await alreadyWelcomed(g.id, user.id)) return;
+  await welcome(g.tgChatId, g.title, g.settings.welcomeMessage, g.settings.rules, user);
+}
+
 async function onJoinRequest(r: any) {
   const g = await getGroup(String(r.chat.id));
   if (!g || g.status !== 'active' || !g.settings.autoApproveJoin) return;
   const ok = await tg('approveChatJoinRequest', { chat_id: r.chat.id, user_id: r.from.id });
-  if (ok.ok && g.settings.welcomeEnabled) await welcome(g.tgChatId, g.title, g.settings.welcomeMessage, g.settings.rules, r.from);
+  if (ok.ok) await greet(r.chat.id, r.from);
 }
 
 async function onNewMembers(m: any) {
-  const g = await cachedGroup(String(m.chat.id));
-  if (!g || g.status !== 'active' || !g.settings.welcomeEnabled) return;
-  for (const u of m.new_chat_members.filter((x: any) => !x.is_bot).slice(0, 3)) {
-    await welcome(g.tgChatId, g.title, g.settings.welcomeMessage, g.settings.rules, u);
-  }
+  for (const u of m.new_chat_members.slice(0, 5)) await greet(m.chat.id, u);
+}
+
+// Katta guruhlarda Telegram "qo'shildi" service xabarini yashirishi mumkin — shunda chat_member yangilanishi ishlaydi.
+async function onChatMember(u: any) {
+  if (u.chat?.type === 'private' || u.chat?.type === 'channel') return;
+  const was = u.old_chat_member;
+  const now = u.new_chat_member;
+  if (!was || !now) return;
+  const inBefore = ['member', 'administrator', 'creator'].includes(was.status) || (was.status === 'restricted' && was.is_member);
+  const inNow = ['member', 'administrator', 'creator'].includes(now.status) || (now.status === 'restricted' && now.is_member);
+  if (!inBefore && inNow) await greet(u.chat.id, now.user);
+}
+
+export async function sendWelcomePreview(g: { tgChatId: string; title: string; settings: { welcomeMessage: string; rules: string } }, user: any) {
+  await welcome(g.tgChatId, g.title, g.settings.welcomeMessage, g.settings.rules, user);
 }
 
 async function welcome(chatId: string, title: string, template: string, rules: string, user: any) {
   const name = `<a href="tg://user?id=${user.id}">${esc(displayName(user))}</a>`;
-  let text = esc(template).replace(/\{name\}/g, name).replace(/\{group\}/g, esc(title));
+  const tpl = template && template.trim() ? template : "Assalomu alaykum, {name}! «{group}» guruhiga xush kelibsiz.";
+  const hasName = /\{(name|ism)\}/i.test(tpl);
+  let text = esc(tpl).replace(/\{(name|ism)\}/gi, name).replace(/\{group\}/gi, esc(title));
+  // Admin matnda {name} yozmagan bo'lsa ham a'zo ismi tag qilinadi.
+  if (!hasName) text = `👋 ${name}\n${text}`;
   if (rules.trim()) text += `\n\n📜 <b>Qoidalar:</b>\n${esc(rules)}`;
   await sendMessage(chatId, text.slice(0, 3900));
 }
@@ -320,7 +373,7 @@ export async function setupBot(origin: string, secret: string) {
   const hook = await tg('setWebhook', {
     url: `${origin}/bot/webhook`,
     secret_token: secret,
-    allowed_updates: ['message', 'poll', 'poll_answer', 'chat_join_request', 'my_chat_member'],
+    allowed_updates: ['message', 'poll', 'poll_answer', 'chat_join_request', 'my_chat_member', 'chat_member'],
     drop_pending_updates: true,
   });
   await tg('setMyCommands', {

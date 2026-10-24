@@ -1,7 +1,7 @@
 import { initData } from './tg';
 import type {
-  AdRecord, AdminCodeRecord, AuditLogRecord, BotHealth, CertificateTemplate, GroupRecord, MeResponse, ModerationLog, PublicCertificate,
-  QuestionRecord, QuizRecord, QuizSummary, StatsOverview,
+  AdRecord, AdminCodeRecord, AuditLogRecord, BotHealth, CertificateTemplate, GroupRecord, GroupView, HelperAdmin, HelperInvite, HelperPerm, MeResponse,
+  ModerationLog, PublicCertificate, QuestionRecord, QuizRecord, QuizSummary, StatsOverview,
 } from '../types';
 
 export class ApiError extends Error {
@@ -55,15 +55,20 @@ export const api = {
   me: () => request<MeResponse>('/me'),
   templates: () => request<CertificateTemplate[]>('/certificate-templates'),
   health: (gid: string) => request<BotHealth>(`/groups/${encodeURIComponent(gid)}/health`),
-  updateSettings: (gid: string, s: unknown) => request<{ group: GroupRecord }>(`/groups/${encodeURIComponent(gid)}/settings`, 'PATCH', s),
-  updateCert: (gid: string, s: unknown) => request<{ group: GroupRecord }>(`/groups/${encodeURIComponent(gid)}/certificate-settings`, 'PATCH', s),
+  updateSettings: (gid: string, s: unknown) => request<{ group: GroupView }>(`/groups/${encodeURIComponent(gid)}/settings`, 'PATCH', s),
+  updateCert: (gid: string, s: unknown) => request<{ group: GroupView }>(`/groups/${encodeURIComponent(gid)}/certificate-settings`, 'PATCH', s),
   stats: (gid: string) => request<StatsOverview>(`/groups/${encodeURIComponent(gid)}/stats`),
   moderation: (gid: string) => request<{ logs: ModerationLog[] }>(`/groups/${encodeURIComponent(gid)}/moderation`),
-  ads: (gid: string) =>
-    request<{ ads: { id: string; title: string; text: string }[]; adFrequencyPerWeek: number; adMinPerWeek: number; adMaxPerWeek: number; adFree: boolean; postedLastWeek: number }>(
-      `/groups/${encodeURIComponent(gid)}/ads`
-    ),
-  setAdFrequency: (gid: string, frequency: number) => request(`/groups/${encodeURIComponent(gid)}/ads`, 'PATCH', { frequency }),
+  welcomeTest: (gid: string) => request(`/groups/${encodeURIComponent(gid)}/welcome-test`, 'POST'),
+  helpers: (gid: string) =>
+    request<{ helpers: HelperAdmin[]; invites: HelperInvite[]; max: number; botUsername: string }>(`/groups/${encodeURIComponent(gid)}/helpers`),
+  helperInvite: (gid: string, perms: HelperPerm[]) =>
+    request<{ code: string; link: string }>(`/groups/${encodeURIComponent(gid)}/helpers/invite`, 'POST', { perms }),
+  helperRevokeInvite: (gid: string, code: string) => request(`/groups/${encodeURIComponent(gid)}/helpers/invite/${encodeURIComponent(code)}`, 'DELETE'),
+  helperAdd: (gid: string, userId: string, perms: HelperPerm[]) => request<{ helpers: HelperAdmin[] }>(`/groups/${encodeURIComponent(gid)}/helpers`, 'POST', { userId, perms }),
+  helperPerms: (gid: string, uid: string, perms: HelperPerm[]) =>
+    request<{ helpers: HelperAdmin[] }>(`/groups/${encodeURIComponent(gid)}/helpers/${encodeURIComponent(uid)}`, 'PATCH', { perms }),
+  helperRemove: (gid: string, uid: string) => request<{ helpers: HelperAdmin[] }>(`/groups/${encodeURIComponent(gid)}/helpers/${encodeURIComponent(uid)}`, 'DELETE'),
   generate: (gid: string, p: { topic: string; difficulty: string; questionCount: number; optionsCount: number; language: string }) =>
     request<{ questions: QuestionRecord[] }>(`/groups/${encodeURIComponent(gid)}/quizzes/generate`, 'POST', p),
   quizzes: (gid: string) => request<QuizSummary[]>(`/groups/${encodeURIComponent(gid)}/quizzes`),
@@ -71,6 +76,7 @@ export const api = {
   quiz: (id: string) => request<QuizRecord>(`/quizzes/${encodeURIComponent(id)}`),
   sendQuiz: (id: string) => request(`/quizzes/${encodeURIComponent(id)}/send`, 'POST'),
   stopQuiz: (id: string) => request(`/quizzes/${encodeURIComponent(id)}/stop`, 'POST'),
+  restartQuiz: (id: string, mode: 'now' | 'draft') => request(`/quizzes/${encodeURIComponent(id)}/restart`, 'POST', { mode }),
   deleteQuiz: (id: string) => request(`/quizzes/${encodeURIComponent(id)}`, 'DELETE'),
 
   // ---- owner (server rejects everyone except SUPER_ADMIN_IDS)
@@ -86,6 +92,8 @@ export const api = {
   ownerAds: () => request<AdRecord[]>('/owner/ads'),
   ownerCreateAd: (d: unknown) => request<{ ad: AdRecord }>('/owner/ads', 'POST', d),
   ownerToggleAd: (id: string) => request(`/owner/ads/${encodeURIComponent(id)}`, 'PATCH'),
+  ownerAdTargets: (id: string, targetGroupIds: string[]) => request(`/owner/ads/${encodeURIComponent(id)}`, 'PATCH', { targetGroupIds }),
+  ownerSendAd: (id: string, groupIds: string[]) => request<{ sent: number; failed: string[] }>(`/owner/ads/${encodeURIComponent(id)}/send`, 'POST', { groupIds }),
   ownerDeleteAd: (id: string) => request(`/owner/ads/${encodeURIComponent(id)}`, 'DELETE'),
   ownerAudit: () => request<AuditLogRecord[]>('/owner/audit'),
   ownerBroadcast: (text: string) => request<{ sent: number; total: number }>('/owner/broadcast', 'POST', { text }),

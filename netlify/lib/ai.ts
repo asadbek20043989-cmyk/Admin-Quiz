@@ -1,39 +1,85 @@
 import type { Difficulty, QuestionRecord } from '../../src/types/index.ts';
-import { GEMINI_KEY, GEMINI_MODEL } from './config.ts';
+import { GEMINI_FALLBACKS, GEMINI_KEY, GEMINI_MODEL } from './config.ts';
 
 interface GeminiResult {
   text: string;
   tokens: number;
 }
 
-async function gemini(prompt: string, json: boolean, timeoutMs = 8500): Promise<GeminiResult> {
+let workingModel = ''; // oxirgi muvaffaqiyatli model (warm instance ichida eslab qolinadi)
+
+class AiHttpError extends Error {
+  constructor(public status: number, msg: string) {
+    super(msg);
+  }
+}
+
+async function callModel(model: string, prompt: string, json: boolean, timeoutMs: number): Promise<GeminiResult> {
   const key = GEMINI_KEY();
-  if (!key) throw new Error("GEMINI_API_KEY sozlanmagan");
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL()}:generateContent`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: json ? { responseMimeType: 'application/json', temperature: 0.7 } : { temperature: 0.5 },
-        }),
-        signal: ctrl.signal,
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+      // Yangi modellarda temperature/top_p eskirgan, shuning uchun yuborilmaydi.
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: json ? { responseMimeType: 'application/json' } : {},
+      }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const d: any = await res.json();
+        detail = String(d?.error?.message || '').slice(0, 160);
+      } catch {
+        /* ignore */
       }
-    );
-    if (!res.ok) throw new Error(`AI xatosi (${res.status})`);
+      throw new AiHttpError(res.status, detail);
+    }
     const data: any = await res.json();
     const text = data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text || '').join('') || '';
     return { text, tokens: data?.usageMetadata?.totalTokenCount || 0 };
-  } catch (e: any) {
-    if (e?.name === 'AbortError') throw new Error("AI javob berishga ulgurmadi, qayta urinib ko'ring");
-    throw e;
   } finally {
     clearTimeout(timer);
   }
+}
+
+const humanAiError = (status: number, detail: string) => {
+  if (status === 404) return "AI modeli topilmadi yoki o'chirilgan (404). Netlify'da GEMINI_MODEL o'zgaruvchisini yangi modelga (masalan gemini-3.8-flash) o'zgartiring yoki uni butunlay o'chirib qo'ying.";
+  if (status === 400 && /api key/i.test(detail)) return "GEMINI_API_KEY noto'g'ri. Google AI Studio'dan yangi kalit oling.";
+  if (status === 401 || status === 403) return `AI kalitiga ruxsat yo'q (${status}). GEMINI_API_KEY ni tekshiring.`;
+  if (status === 429) return "AI so'rovlar limiti tugadi (429). Bir ozdan keyin qayta urinib ko'ring.";
+  if (status >= 500) return `AI xizmati vaqtincha ishlamayapti (${status}). Qayta urinib ko'ring.`;
+  return `AI xatosi (${status})${detail ? ': ' + detail : ''}`;
+};
+
+async function gemini(prompt: string, json: boolean, timeoutMs = 8500): Promise<GeminiResult> {
+  if (!GEMINI_KEY()) throw new Error('GEMINI_API_KEY sozlanmagan');
+  const chain = [...new Set([workingModel, GEMINI_MODEL(), ...GEMINI_FALLBACKS].filter(Boolean))];
+  let last: AiHttpError | null = null;
+  for (const model of chain) {
+    try {
+      const r = await callModel(model, prompt, json, timeoutMs);
+      workingModel = model;
+      return r;
+    } catch (e: any) {
+      if (e?.name === 'AbortError') throw new Error("AI javob berishga ulgurmadi, qayta urinib ko'ring");
+      if (e instanceof AiHttpError) {
+        last = e;
+        // Model yo'q/o'chirilgan yoki vaqtincha band bo'lsa — keyingi modelni sinaymiz.
+        if (e.status === 404 || e.status === 503 || (e.status === 400 && /model/i.test(e.message))) {
+          if (model === workingModel) workingModel = '';
+          continue;
+        }
+        throw new Error(humanAiError(e.status, e.message));
+      }
+      throw e;
+    }
+  }
+  throw new Error(last ? humanAiError(last.status, last.message) : "AI bilan bog'lanib bo'lmadi");
 }
 
 const LEVEL: Record<Difficulty, string> = {

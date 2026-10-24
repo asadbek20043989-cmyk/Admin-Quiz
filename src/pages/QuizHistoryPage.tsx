@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { ChevronDown, Send, Square, Trash2 } from 'lucide-react';
+import { ChevronDown, RotateCcw, Send, Square, Trash2 } from 'lucide-react';
+import { can } from '../lib/perms';
 import { api } from '../lib/api';
 import { confirmAction } from '../lib/tg';
-import type { QuizRecord, QuizSummary } from '../types';
+import type { GroupView, QuizRecord, QuizSummary } from '../types';
 import { Badge, Btn, Card, Empty, ErrorBox, Spinner, fmtDate } from '../components/ui';
 
 const STATUS: Record<QuizSummary['status'], { label: string; tone: 'slate' | 'sky' | 'emerald' | 'amber' | 'rose' }> = {
@@ -14,12 +15,13 @@ const STATUS: Record<QuizSummary['status'], { label: string; tone: 'slate' | 'sk
 };
 
 interface Props {
+  group: GroupView;
   quizzes: QuizSummary[];
   onChanged: () => void;
   toast: (m: string, ok?: boolean) => void;
 }
 
-export const QuizHistoryPage: React.FC<Props> = ({ quizzes, onChanged, toast }) => {
+export const QuizHistoryPage: React.FC<Props> = ({ group, quizzes, onChanged, toast }) => {
   const [openId, setOpenId] = useState<string | null>(null);
   const [detail, setDetail] = useState<QuizRecord | null>(null);
   const [loading, setLoading] = useState(false);
@@ -123,7 +125,15 @@ export const QuizHistoryPage: React.FC<Props> = ({ quizzes, onChanged, toast }) 
                           <Square className="w-3.5 h-3.5" /> {detail.status === 'running' ? "To'xtatish" : 'Bekor qilish'}
                         </Btn>
                       )}
-                      {detail.status !== 'running' && (
+                      {(detail.status === 'finished' || detail.status === 'cancelled') && group.status === 'active' && (
+                        <>
+                          <Btn tone="primary" busy={busy} onClick={async () => (await confirmAction(`«${detail.topic}» quizi qayta boshlansinmi? Eski natijalar tarixda saqlanadi, yangi urinish alohida hisoblanadi.`)) && act(() => api.restartQuiz(detail.id, 'now'), 'Quiz qayta boshlandi 🚀')}>
+                            <RotateCcw className="w-3.5 h-3.5" /> Qayta boshlash
+                          </Btn>
+                          <Btn busy={busy} onClick={() => act(() => api.restartQuiz(detail.id, 'draft'), 'Nusxa qoralama sifatida saqlandi')}>Qoralama nusxa</Btn>
+                        </>
+                      )}
+                      {detail.status !== 'running' && can(group, 'deleteQuiz') && (
                         <Btn tone="danger" busy={busy} onClick={async () => (await confirmAction("Quiz o'chirilsinmi?")) && act(() => api.deleteQuiz(detail.id), "O'chirildi")}>
                           <Trash2 className="w-3.5 h-3.5" /> O'chirish
                         </Btn>
