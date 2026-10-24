@@ -28,18 +28,42 @@ export async function maybePostAd(g: GroupRecord): Promise<boolean> {
   const ad = cands[0];
   if (!ad) return false;
 
-  // Only the ad text itself (optionally with a photo and a button) - no labels or extra wording.
-  const text = esc(ad.text);
-  const markup =
-    ad.buttonText && ad.buttonUrl ? { reply_markup: { inline_keyboard: [[{ text: ad.buttonText, url: ad.buttonUrl }]] } } : {};
-  const r = ad.imageUrl
-    ? await tg('sendPhoto', { chat_id: g.tgChatId, photo: ad.imageUrl, caption: text.slice(0, 1000), parse_mode: 'HTML', ...markup })
-    : await sendMessage(g.tgChatId, text, markup);
-  if (!r.ok) return false;
+  const ok = await postAd(ad, g);
+  if (!ok) return false;
 
   ad.impressions += 1;
   await saveAds(ads);
   g.adLog = [...log, new Date().toISOString()];
   g.lastAdAt = new Date().toISOString();
   return true;
+}
+
+// Sends exactly the ad text (optionally with a photo and a button) - no labels or extra wording.
+export async function postAd(ad: AdRecord, g: GroupRecord): Promise<boolean> {
+  const text = esc(ad.text);
+  const markup =
+    ad.buttonText && ad.buttonUrl ? { reply_markup: { inline_keyboard: [[{ text: ad.buttonText, url: ad.buttonUrl }]] } } : {};
+  const r = ad.imageUrl
+    ? await tg('sendPhoto', { chat_id: g.tgChatId, photo: ad.imageUrl, caption: text.slice(0, 1000), parse_mode: 'HTML', ...markup })
+    : await sendMessage(g.tgChatId, text, markup);
+  return !!r.ok;
+}
+
+// Owner-triggered send: ignores the weekly frequency limits. Returns how many groups received it.
+export async function sendAdToGroups(adId: string, groupIds: string[] | 'all'): Promise<{ sent: number; total: number }> {
+  const { listAllGroups, getGroup } = await import('./db.ts');
+  const ads = await getAds();
+  const ad = ads.find(a => a.id === adId);
+  if (!ad) return { sent: 0, total: 0 };
+  const groups = (groupIds === 'all' ? await listAllGroups() : (await Promise.all(groupIds.map(getGroup))).filter(Boolean)) as GroupRecord[];
+  const targets = groups.filter(g => g.status === 'active');
+  let sent = 0;
+  for (const g of targets) {
+    if (await postAd(ad, g)) sent++;
+  }
+  if (sent) {
+    ad.impressions += sent;
+    await saveAds(ads);
+  }
+  return { sent, total: targets.length };
 }

@@ -21,7 +21,7 @@ Admin oynasida Super Admin tugmasi **yo'q**, Admin bundle'ida Super Admin kodi h
    - `BOT_TOKEN` — BotFather tokeni
    - `SUPER_ADMIN_IDS` — sizning Telegram ID'ingiz (bir nechta bo'lsa vergul bilan)
    - `GEMINI_API_KEY` — Google AI Studio kaliti
-   - ixtiyoriy: `GEMINI_MODEL` (standart `gemini-2.5-flash`), `SITE_URL`
+   - ixtiyoriy: `GEMINI_MODEL` (standart `gemini-3.8-flash`), `SITE_URL`
    - tavsiya: `MINIAPP_SHORTNAME` — sertifikat tugmasi "Open this link?" oynasisiz ochilishi uchun (pastga qarang)
 3. Env o'zgaruvchilarni qo'shgach **qayta deploy** qiling.
 
@@ -44,7 +44,7 @@ Shundan keyin g'oliblar tugmani bosganda sertifikat Telegram ichida to'g'ridan-t
 - Savollar guruhga ketma-ket yuboriladi. Admin har bir savol vaqtini (5–600 soniya) o'zi belgilaydi. Vaqt tugashi bilan keyingi savol **avtomatik** yuboriladi: quiz davomida kichik fon funksiyasi (`quiz-runner-background`) kutib turadi va aynan vaqtida uyg'onadi.
 - Natijalar: +1 ball to'g'ri javobga, tezlik uchun +0.5 gacha bonus. Tenglikda: ko'p to'g'ri javob, keyin kam vaqt.
 - Top-N o'rin olganlar (kamida 1 ta to'g'ri javob bilan) guruhda ism bilan tegiladi va har biriga sertifikat tugmasi beriladi. Sertifikat brauzerda chiziladi (fan nomi yozilmaydi).
-- Reklama: faqat Super Admin yaratgan matn (rasm/tugma bilan yoki usiz) quiz natijalaridan keyin yuboriladi, hech qanday qo'shimcha yozuvsiz.
+- Reklama: Super Admin paneli → Reklama → «Guruhlarga yuborish». Istalgan guruh(lar)ni tanlab, hozir yoki belgilangan vaqtda yuboradi. Guruhda faqat reklama matni (rasm/tugma bilan yoki usiz) ko'rinadi, boshqa yozuv yo'q.
 - Rejalashtirilgan quizlarni boshlash uchun har 5 daqiqada yengil `cron` ishlaydi (bitta kichik yozuvni o'qiydi, ish bo'lmasa darhol tugaydi).
 - Barcha statistika **noldan** boshlanadi. Ma'lumotlar Netlify Blobs'da saqlanadi.
 

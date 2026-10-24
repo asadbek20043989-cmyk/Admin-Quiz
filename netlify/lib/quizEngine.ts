@@ -4,7 +4,7 @@ import { esc, formatDateUz, tashkentHour, tashkentMonth, uid as makeId, WEBHOOK_
 import { getGroup, getJSON, getQuiz, getText, listKeys, saveGroup, saveQuiz, setText, updateIndex, upsertSummary, setJSON } from './db.ts';
 import { botUsername, sendMessage, tg } from './tg.ts';
 import { recordQuizFinished } from './stats.ts';
-import { maybePostAd, siteUrl } from './ads.ts';
+import { siteUrl } from './ads.ts';
 
 const pollCache = new Map<string, string>();
 
@@ -260,11 +260,6 @@ export async function finalizeQuiz(quizId: string) {
   } catch {
     /* results are saved even if posting fails */
   }
-  try {
-    await maybePostAd(g);
-  } catch {
-    /* ignore */
-  }
   await saveGroup(g);
 
   const answeredTotal = perQ.reduce((a, b) => a + b.answered, 0);
@@ -380,6 +375,16 @@ export async function runDue(): Promise<void> {
         }
       }
     }
+  }
+  // Owner-scheduled ads that are due
+  const dueAds = (idx.ads || []).filter(a => a.at <= now);
+  if (dueAds.length) {
+    const { sendAdToGroups } = await import('./ads.ts');
+    const { getIndex: reload, setJSON: put } = await import('./db.ts');
+    for (const a of dueAds) await sendAdToGroups(a.adId, a.groupIds);
+    const fresh = await reload();
+    fresh.ads = (fresh.ads || []).filter(a => !dueAds.some(d => d.adId === a.adId && d.at === a.at));
+    await put('idx/active', fresh);
   }
   // Recover quizzes whose background runner stopped (deploy, timeout): relaunch it.
   for (const r of idx.running.filter(r => r.nextAt + 90000 < now)) {

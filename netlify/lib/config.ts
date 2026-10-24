@@ -17,7 +17,7 @@ export const WEBHOOK_SECRET = () =>
 export const CODE_PEPPER = () => createHash('sha256').update('qb-code:' + BOT_TOKEN()).digest('hex');
 
 export const GEMINI_KEY = () => process.env.GEMINI_API_KEY || '';
-export const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+export const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 
 // Asia/Tashkent is UTC+5 with no DST.
 const TZ_OFFSET_MS = 5 * 3600 * 1000;

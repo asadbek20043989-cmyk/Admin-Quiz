@@ -90,6 +90,7 @@ export async function removeSummary(groupId: string, quizId: string) {
 export interface ActiveIndex {
   scheduled: { id: string; at: number }[];
   running: { id: string; nextAt: number }[];
+  ads?: { adId: string; groupIds: string[] | 'all'; at: number }[];
 }
 export async function getIndex(): Promise<ActiveIndex> {
   return (await getJSON<ActiveIndex>('idx/active')) || { scheduled: [], running: [] };

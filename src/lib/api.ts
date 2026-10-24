@@ -65,6 +65,7 @@ export const api = {
   createQuiz: (gid: string, d: QuizDraftInput) => request<{ quiz: QuizRecord }>(`/groups/${encodeURIComponent(gid)}/quizzes`, 'POST', d),
   quiz: (id: string) => request<QuizRecord>(`/quizzes/${encodeURIComponent(id)}`),
   sendQuiz: (id: string) => request(`/quizzes/${encodeURIComponent(id)}/send`, 'POST'),
+  restartQuiz: (id: string) => request<{ id: string }>(`/quizzes/${encodeURIComponent(id)}/restart`, 'POST'),
   stopQuiz: (id: string) => request(`/quizzes/${encodeURIComponent(id)}/stop`, 'POST'),
   deleteQuiz: (id: string) => request(`/quizzes/${encodeURIComponent(id)}`, 'DELETE'),
 
@@ -80,6 +81,8 @@ export const api = {
   ownerRevokeCode: (id: string) => request(`/owner/codes/${encodeURIComponent(id)}/revoke`, 'POST'),
   ownerAds: () => request<AdRecord[]>('/owner/ads'),
   ownerCreateAd: (d: unknown) => request<{ ad: AdRecord }>('/owner/ads', 'POST', d),
+  ownerSendAd: (id: string, groupIds: string[] | 'all', at?: string) =>
+    request<{ sent?: number; total?: number; scheduled?: boolean }>(`/owner/ads/${encodeURIComponent(id)}/send`, 'POST', { groupIds, at }),
   ownerToggleAd: (id: string) => request(`/owner/ads/${encodeURIComponent(id)}`, 'PATCH'),
   ownerDeleteAd: (id: string) => request(`/owner/ads/${encodeURIComponent(id)}`, 'DELETE'),
   ownerAudit: () => request<AuditLogRecord[]>('/owner/audit'),

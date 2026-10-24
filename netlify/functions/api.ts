@@ -3,13 +3,13 @@ import type {
   AdminCodeRecord, AdRecord, BotHealth, CertificateTemplate, GroupRecord, MeResponse, ModerationLog, QuestionRecord, QuizRecord, QuizSummary,
 } from '../../src/types/index.ts';
 import { authenticate, displayName, type AuthedUser } from '../lib/auth.ts';
-import { getText, setText, audit, getGroup, getJSON, getQuiz, groupsOfAdmin, listAllGroups, removeSummary, saveGroup, saveQuiz, setJSON, updateIndex, upsertSummary, del } from '../lib/db.ts';
+import { getIndex, getText, setText, audit, getGroup, getJSON, getQuiz, groupsOfAdmin, listAllGroups, removeSummary, saveGroup, saveQuiz, setJSON, updateIndex, upsertSummary, del } from '../lib/db.ts';
 import { botId, botUsername, sendMessage, tg } from '../lib/tg.ts';
 import { esc, uid, WEBHOOK_SECRET, BOT_TOKEN, GEMINI_KEY, SUPER_ADMIN_IDS } from '../lib/config.ts';
 import { refreshMemberCount, rollQuotas } from '../lib/groups.ts';
 import { generateQuiz } from '../lib/ai.ts';
 import { getStats, saveStats, snapshotMembers, toOverview } from '../lib/stats.ts';
-import { getAds, saveAds, siteUrl } from '../lib/ads.ts';
+import { getAds, saveAds, siteUrl, sendAdToGroups } from '../lib/ads.ts';
 import { hashCode, setupBot } from '../lib/bot.ts';
 import { publicCertificate, startQuiz, stopQuiz } from '../lib/quizEngine.ts';
 
@@ -162,6 +162,36 @@ export default async (req: Request) => {
         if (!r.ok) return err(r.error || 'Yuborib bo\'lmadi', 409);
         await audit(displayName(me.user), 'QUIZ_YUBORILDI', `«${quiz.topic}» guruhga yuborildi`, group.id);
         return json({ success: true });
+      }
+      if (parts[2] === 'restart' && method === 'POST') {
+        activeOnly(group);
+        if (quiz.status === 'running') return err('Quiz hozir davom etmoqda');
+        // A replay is a fresh copy (new id, no results), so the old results stay in the history.
+        const copy: QuizRecord = {
+          ...quiz,
+          id: uid('qz'),
+          status: 'draft',
+          scheduledAt: undefined,
+          createdAt: new Date().toISOString(),
+          startedAt: undefined,
+          finishedAt: undefined,
+          results: undefined,
+          participantCount: undefined,
+          cursor: undefined,
+          nextAt: undefined,
+          qSentAt: undefined,
+          pollIds: undefined,
+          messageIds: undefined,
+          runner: undefined,
+          createdBy: String(me.user.id),
+          questions: quiz.questions.map(q => ({ ...q })),
+        };
+        await saveQuiz(copy);
+        await upsertSummary(copy);
+        const r = await startQuiz(copy.id);
+        if (!r.ok) return err(`${r.error} (quiz qoralama sifatida saqlandi)`, 409);
+        await audit(displayName(me.user), 'QUIZ_QAYTA_BOSHLANDI', `«${quiz.topic}» qayta o'tkazildi`, group.id);
+        return json({ success: true, id: copy.id });
       }
       if (parts[2] === 'stop' && method === 'POST') {
         await stopQuiz(quiz.id);
@@ -423,6 +453,21 @@ async function ownerRoutes(p: string[], method: string, req: Request, me: Authed
     }
     const ad = ads.find(a => a.id === p[1]);
     if (!ad) return err('Reklama topilmadi', 404);
+    if (p[2] === 'send' && method === 'POST') {
+      const ids: string[] | 'all' = body.groupIds === 'all' ? 'all' : Array.isArray(body.groupIds) ? body.groupIds.map(String) : [];
+      if (ids !== 'all' && ids.length === 0) return err('Kamida bitta guruhni tanlang');
+      const at = body.at ? new Date(body.at).getTime() : 0;
+      if (at && at > Date.now() + 60 * 1000) {
+        const idx = await getIndex();
+        idx.ads = [...(idx.ads || []), { adId: ad.id, groupIds: ids, at }];
+        await setJSON('idx/active', idx);
+        await audit(actor, 'REKLAMA_REJALANDI', `«${ad.title}» ${new Date(at).toISOString()} ga rejalandi`);
+        return json({ success: true, scheduled: true });
+      }
+      const r = await sendAdToGroups(ad.id, ids);
+      await audit(actor, 'REKLAMA_YUBORILDI', `«${ad.title}»: ${r.sent}/${r.total} guruhga yuborildi`);
+      return json({ success: true, ...r });
+    }
     if (method === 'PATCH') {
       ad.status = ad.status === 'active' ? 'paused' : 'active';
       await saveAds(ads);

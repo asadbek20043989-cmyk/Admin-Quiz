@@ -6,38 +6,64 @@ interface GeminiResult {
   tokens: number;
 }
 
-async function gemini(prompt: string, json: boolean, timeoutMs = 8500): Promise<GeminiResult> {
-  const key = GEMINI_KEY();
-  if (!key) throw new Error("GEMINI_API_KEY sozlanmagan");
+// Google retires models over time (a retired model answers HTTP 404). We try the configured model
+// first and then fall back to newer ones, remembering whichever works while the instance is warm.
+const FALLBACK_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash-lite'];
+let workingModel = '';
+let thinkingUnsupported = false;
+
+async function callModel(model: string, prompt: string, json: boolean, timeoutMs: number, withThinking: boolean) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL()}:generateContent`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            ...(json ? { responseMimeType: 'application/json', temperature: 0.6 } : { temperature: 0.4 }),
-            maxOutputTokens: 3000,
-            // "Thinking" makes Gemini 2.5 several times slower; quiz questions do not need it.
-            ...(/2\.5-flash/.test(GEMINI_MODEL()) ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
-          },
-        }),
-        signal: ctrl.signal,
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY() },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          ...(json ? { responseMimeType: 'application/json', temperature: 0.6 } : { temperature: 0.4 }),
+          maxOutputTokens: 3000,
+          // Quiz questions do not need long "thinking"; keep it minimal for speed.
+          ...(withThinking ? { thinkingConfig: { thinkingLevel: 'low' } } : {}),
+        },
+      }),
+      signal: ctrl.signal,
+    });
+    const data: any = await res.json().catch(() => ({}));
+    return { status: res.status, data };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function gemini(prompt: string, json: boolean, timeoutMs = 8500): Promise<GeminiResult> {
+  if (!GEMINI_KEY()) throw new Error('GEMINI_API_KEY sozlanmagan');
+  const candidates = [...new Set([workingModel, GEMINI_MODEL(), ...FALLBACK_MODELS].filter(Boolean))];
+  let lastMsg = '';
+  try {
+    for (const model of candidates) {
+      let r = await callModel(model, prompt, json, timeoutMs, !thinkingUnsupported);
+      if (r.status === 400 && !thinkingUnsupported) {
+        thinkingUnsupported = true; // this model/API does not accept the thinking option
+        r = await callModel(model, prompt, json, timeoutMs, false);
       }
-    );
-    if (!res.ok) throw new Error(`AI xatosi (${res.status})`);
-    const data: any = await res.json();
-    const text = data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text || '').join('') || '';
-    return { text, tokens: data?.usageMetadata?.totalTokenCount || 0 };
+      if (r.status === 404) {
+        lastMsg = `«${model}» modeli topilmadi`;
+        continue; // retired or unavailable: try the next model
+      }
+      if (r.status !== 200) {
+        const detail = String(r.data?.error?.message || '').slice(0, 140);
+        throw new Error(`AI xatosi (${r.status})${detail ? ': ' + detail : ''}`);
+      }
+      workingModel = model;
+      const text = r.data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text || '').join('') || '';
+      return { text, tokens: r.data?.usageMetadata?.totalTokenCount || 0 };
+    }
+    throw new Error(`AI modeli topilmadi (${lastMsg}). Netlify'da GEMINI_MODEL ni hozirgi modelga o'zgartiring (masalan gemini-3.8-flash).`);
   } catch (e: any) {
     if (e?.name === 'AbortError') throw new Error("AI javob berishga ulgurmadi, qayta urinib ko'ring");
     throw e;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

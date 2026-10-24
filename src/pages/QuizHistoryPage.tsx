@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, Send, Square, Trash2 } from 'lucide-react';
+import { ChevronDown, RotateCcw, Send, Square, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { confirmAction } from '../lib/tg';
 import type { QuizRecord, QuizSummary } from '../types';
@@ -116,6 +116,11 @@ export const QuizHistoryPage: React.FC<Props> = ({ quizzes, onChanged, toast }) 
                       {(detail.status === 'draft' || detail.status === 'scheduled') && (
                         <Btn tone="primary" busy={busy} onClick={async () => (await confirmAction('Hozir guruhga yuborilsinmi?')) && act(() => api.sendQuiz(detail.id), 'Quiz guruhga yuborildi 🚀')}>
                           <Send className="w-3.5 h-3.5" /> Hozir yuborish
+                        </Btn>
+                      )}
+                      {(detail.status === 'finished' || detail.status === 'cancelled') && (
+                        <Btn tone="primary" busy={busy} onClick={async () => (await confirmAction('Quiz xuddi shu savollar bilan guruhga qayta yuborilsinmi? Eski natijalar tarixda saqlanadi.')) && act(() => api.restartQuiz(detail.id), 'Quiz qayta boshlandi 🚀')}>
+                          <RotateCcw className="w-3.5 h-3.5" /> Qayta boshlash
                         </Btn>
                       )}
                       {(detail.status === 'running' || detail.status === 'scheduled') && (

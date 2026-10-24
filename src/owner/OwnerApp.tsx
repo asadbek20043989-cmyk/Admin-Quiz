@@ -313,6 +313,7 @@ function Ads({ toast }: T) {
   const { data: ads, setData, error, reload } = useLoad<AdRecord[]>(api.ownerAds);
   const [open, setOpen] = useState(false);
   const [f, setF] = useState({ title: '', text: '', imageUrl: '', buttonText: '', buttonUrl: '' });
+  const [sendAd, setSendAd] = useState<AdRecord | null>(null);
   if (error) return <ErrorBox message={error} onRetry={reload} />;
   if (!ads) return <Spinner />;
   const create = async () => {
@@ -336,12 +337,14 @@ function Ads({ toast }: T) {
           <div className="flex items-center justify-between gap-2"><b className="text-sm truncate">{a.title}</b><Badge tone={a.status === 'active' ? 'emerald' : 'slate'}>{a.status === 'active' ? 'Faol' : 'Pauza'}</Badge></div>
           <div className="text-xs text-slate-400">{a.text}</div>
           <div className="text-[11px] text-slate-500">Guruhlarga chiqarilgan: {a.impressions} marta</div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            <Btn tone="primary" onClick={() => setSendAd(a)}>Guruhlarga yuborish</Btn>
             <Btn onClick={async () => { try { await api.ownerToggleAd(a.id); setData(ads.map(x => (x.id === a.id ? { ...x, status: x.status === 'active' ? 'paused' : 'active' } : x))); } catch (e: any) { toast(e.message, false); } }}>{a.status === 'active' ? 'Pauza' : 'Yoqish'}</Btn>
             <Btn tone="danger" onClick={async () => { if (!(await confirmAction("Reklama o'chirilsinmi?"))) return; try { await api.ownerDeleteAd(a.id); setData(ads.filter(x => x.id !== a.id)); } catch (e: any) { toast(e.message, false); } }}><Trash2 className="w-3.5 h-3.5" /></Btn>
           </div>
         </Card>
       ))}
+      {sendAd && <SendAdModal ad={sendAd} onClose={() => { setSendAd(null); reload(); }} toast={toast} />}
       {open && (
         <Modal title="Yangi reklama" onClose={() => setOpen(false)}>
           <Field label="Nomi (faqat siz uchun, guruhda ko'rinmaydi)"><input className={inputCls} maxLength={100} {...bind('title')} /></Field>
@@ -351,11 +354,61 @@ function Ads({ toast }: T) {
             <Field label="Tugma matni"><input className={inputCls} maxLength={40} {...bind('buttonText')} /></Field>
             <Field label="Tugma havolasi"><input className={inputCls} {...bind('buttonUrl')} /></Field>
           </div>
-          <p className="text-[11px] text-slate-500">Reklama guruhlarga quiz natijalaridan keyin, faqat shu matn (rasm va tugma bilan yoki usiz) ko'rinishida yuboriladi.</p>
+          <p className="text-[11px] text-slate-500">Reklama avtomatik chiqmaydi: uni o'zingiz «Guruhlarga yuborish» tugmasi bilan, istalgan guruhlarga, hozir yoki belgilangan vaqtda yuborasiz. Guruhda faqat shu matn (rasm va tugma bilan yoki usiz) ko'rinadi.</p>
           <div className="flex justify-end gap-2"><Btn onClick={() => setOpen(false)}>Bekor</Btn><Btn tone="primary" onClick={create}>Yaratish</Btn></div>
         </Modal>
       )}
     </div>
+  );
+}
+
+function SendAdModal({ ad, onClose, toast }: { ad: AdRecord; onClose: () => void; toast: T['toast'] }) {
+  const [groups, setGroups] = useState<GroupRecord[] | null>(null);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [when, setWhen] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.ownerGroups().then(g => setGroups(g.filter(x => x.status === 'active'))).catch(e => toast(e.message, false));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const all = !!groups && groups.length > 0 && picked.length === groups.length;
+  const toggle = (id: string) => setPicked(p => (p.includes(id) ? p.filter(x => x !== id) : [...p, id]));
+  const submit = async () => {
+    if (!picked.length) return toast('Kamida bitta guruhni tanlang', false);
+    if (!(await confirmAction(when ? 'Reklama belgilangan vaqtda yuborilsinmi?' : `Reklama ${picked.length} ta guruhga hozir yuborilsinmi?`))) return;
+    setBusy(true);
+    try {
+      const r = await api.ownerSendAd(ad.id, all ? 'all' : picked, when ? new Date(`${when}:00+05:00`).toISOString() : undefined);
+      haptic('success');
+      toast(r.scheduled ? 'Reklama rejalashtirildi ✅' : `${r.sent}/${r.total} guruhga yuborildi ✅`);
+      onClose();
+    } catch (e: any) {
+      toast(e.message, false);
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Modal title="Reklamani yuborish" onClose={onClose}>
+      {!groups ? <Spinner /> : groups.length === 0 ? <Empty text="Faol guruh yo'q." /> : (
+        <>
+          <button onClick={() => setPicked(all ? [] : groups.map(g => g.id))} className="text-xs font-bold text-sky-400 cursor-pointer">{all ? 'Tanlovni bekor qilish' : 'Hammasini tanlash'}</button>
+          <div className="space-y-1.5 max-h-56 overflow-y-auto">
+            {groups.map(g => (
+              <label key={g.id} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm cursor-pointer">
+                <input type="checkbox" checked={picked.includes(g.id)} onChange={() => toggle(g.id)} className="accent-sky-500 w-4 h-4" />
+                <span className="truncate">{g.title}</span>
+                <span className="ml-auto text-[10px] text-slate-500">{g.memberCount.toLocaleString()}</span>
+              </label>
+            ))}
+          </div>
+          <Field label="Vaqt (ixtiyoriy, Toshkent vaqti)" hint="Bo'sh qoldirsangiz hozir yuboriladi. Rejalashtirilsa, 5 daqiqagacha kechikishi mumkin.">
+            <input type="datetime-local" className={inputCls} value={when} onChange={e => setWhen(e.target.value)} />
+          </Field>
+          <Btn tone="primary" busy={busy} onClick={submit} className="w-full">{when ? 'Rejalashtirish' : `Hozir yuborish (${picked.length})`}</Btn>
+        </>
+      )}
+    </Modal>
   );
 }
 
