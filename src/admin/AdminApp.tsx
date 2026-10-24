@@ -1,30 +1,43 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { BarChart3, Bot, History, Settings, Sparkles } from 'lucide-react';
 import { api } from '../lib/api';
-import { can } from '../lib/perms';
-import type { GroupView, HelperPerm, MeResponse, QuizSummary } from '../types';
+import type { GroupRecord, MeResponse, QuizSummary } from '../types';
 import { ErrorBox, Spinner, TelegramGate, useToast } from '../components/ui';
 import { DashboardPage } from '../pages/DashboardPage';
 import { QuizCreatorPage } from '../pages/QuizCreatorPage';
 import { QuizHistoryPage } from '../pages/QuizHistoryPage';
 import { StatsPage } from '../pages/StatsPage';
+import { CertView } from '../cert/CertApp';
+import { webApp } from '../lib/tg';
 import { SettingsPage } from '../pages/SettingsPage';
 
 type Tab = 'home' | 'new' | 'history' | 'stats' | 'settings';
-const TABS: { id: Tab; label: string; icon: React.ElementType; show: (g: GroupView) => boolean }[] = [
-  { id: 'home', label: 'Bosh sahifa', icon: Bot, show: () => true },
-  { id: 'new', label: 'Yangi quiz', icon: Sparkles, show: g => can(g, 'quiz') },
-  { id: 'history', label: 'Tarix', icon: History, show: g => can(g, 'quiz') },
-  { id: 'stats', label: 'Statistika', icon: BarChart3, show: g => can(g, 'stats') },
-  { id: 'settings', label: 'Sozlamalar', icon: Settings, show: g => g.access.role === 'admin' || (['settings', 'moderation', 'certificate'] as HelperPerm[]).some(p => can(g, p)) },
+const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
+  { id: 'home', label: 'Bosh sahifa', icon: Bot },
+  { id: 'new', label: 'Yangi quiz', icon: Sparkles },
+  { id: 'history', label: 'Tarix', icon: History },
+  { id: 'stats', label: 'Statistika', icon: BarChart3 },
+  { id: 'settings', label: 'Sozlamalar', icon: Settings },
 ];
+
+// Winners open their certificate through a Mini App link: startapp=cert_<quizId>_<userId>.
+function certParams(): { q: string; u: string } | null {
+  const sp = webApp()?.initDataUnsafe?.start_param || new URLSearchParams(location.search).get('tgWebAppStartParam') || '';
+  const m = /^cert_([A-Za-z0-9-]+)_(\d+)$/.exec(sp);
+  return m ? { q: m[1], u: m[2] } : null;
+}
 
 export function AdminApp() {
   return (
     <TelegramGate title="QuizBot — Admin paneli">
-      <Panel />
+      <Entry />
     </TelegramGate>
   );
+}
+
+function Entry() {
+  const c = certParams();
+  return c ? <CertView q={c.q} u={c.u} /> : <Panel />;
 }
 
 function Panel() {
@@ -76,16 +89,14 @@ function Panel() {
   if (me.groups.length === 0) return <Onboarding botUsername={me.botUsername} />;
 
   const group = me.groups.find(g => g.id === groupId) || me.groups[0];
-  const updateGroup = (g: GroupView) => setMe({ ...me, groups: me.groups.map(x => (x.id === g.id ? g : x)) });
-  const tabs = TABS.filter(t => t.show(group));
-  const activeTab: Tab = tabs.some(t => t.id === tab) ? tab : 'home';
+  const updateGroup = (g: GroupRecord) => setMe({ ...me, groups: me.groups.map(x => (x.id === g.id ? g : x)) });
 
   return (
     <div className="min-h-screen flex flex-col max-w-3xl mx-auto">
       <header className="sticky top-0 z-30 bg-slate-950/95 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="font-extrabold text-sm text-white truncate">{group.title}</h1>
-          <p className="text-[11px] text-slate-400">{group.memberCount.toLocaleString()} a'zo{group.access.role === 'helper' ? " · Yordamchi admin" : ''}</p>
+          <p className="text-[11px] text-slate-400">{group.memberCount.toLocaleString()} a'zo</p>
         </div>
         {me.groups.length > 1 && (
           <select
@@ -101,8 +112,8 @@ function Panel() {
       </header>
 
       <main className="flex-1 p-4 pb-28 space-y-4">
-        {activeTab === 'home' && <DashboardPage group={group} quizzes={quizzes} onNavigate={t => setTab(t as Tab)} onChanged={() => loadQuizzes(group.id)} toast={toast.show} />}
-        {activeTab === 'new' && (
+        {tab === 'home' && <DashboardPage group={group} quizzes={quizzes} onNavigate={t => setTab(t as Tab)} onChanged={() => loadQuizzes(group.id)} toast={toast.show} />}
+        {tab === 'new' && (
           <QuizCreatorPage
             group={group}
             onDone={() => {
@@ -113,16 +124,16 @@ function Panel() {
             toast={toast.show}
           />
         )}
-        {activeTab === 'history' && <QuizHistoryPage group={group} quizzes={quizzes} onChanged={() => loadQuizzes(group.id)} toast={toast.show} />}
-        {activeTab === 'stats' && <StatsPage group={group} />}
-        {activeTab === 'settings' && <SettingsPage group={group} onSaved={updateGroup} toast={toast.show} />}
+        {tab === 'history' && <QuizHistoryPage quizzes={quizzes} onChanged={() => loadQuizzes(group.id)} toast={toast.show} />}
+        {tab === 'stats' && <StatsPage group={group} />}
+        {tab === 'settings' && <SettingsPage group={group} onSaved={updateGroup} toast={toast.show} />}
       </main>
 
       <nav className="fixed bottom-0 inset-x-0 z-40 bg-slate-950/95 backdrop-blur border-t border-slate-800" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        <div className="max-w-3xl mx-auto grid" style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}>
-          {tabs.map(t => {
+        <div className="max-w-3xl mx-auto grid grid-cols-5">
+          {TABS.map(t => {
             const Icon = t.icon;
-            const active = activeTab === t.id;
+            const active = tab === t.id;
             return (
               <button key={t.id} onClick={() => setTab(t.id)} className={`py-2.5 flex flex-col items-center gap-0.5 text-[10px] font-semibold cursor-pointer ${active ? 'text-sky-400' : 'text-slate-500'}`}>
                 <Icon className="w-5 h-5" />

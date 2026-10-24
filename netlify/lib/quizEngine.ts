@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { GroupRecord, ParticipantResult, PublicCertificate, QuizRecord } from '../../src/types/index.ts';
-import { esc, formatDateUz, tashkentHour, tashkentMonth } from './config.ts';
+import { esc, formatDateUz, tashkentHour, tashkentMonth, uid as makeId, WEBHOOK_SECRET } from './config.ts';
 import { getGroup, getJSON, getQuiz, getText, listKeys, saveGroup, saveQuiz, setText, updateIndex, upsertSummary, setJSON } from './db.ts';
 import { botUsername, sendMessage, tg } from './tg.ts';
 import { recordQuizFinished } from './stats.ts';
@@ -66,7 +66,28 @@ export async function startQuiz(quizId: string): Promise<{ ok: boolean; error?: 
     return { ok: false, error: `Savol yuborilmadi: ${ok.error}` };
   }
   await upsertSummary(quiz);
+  await launchRunner(quiz.id);
   return { ok: true };
+}
+
+// A background function sleeps until each question's time is over and then sends the next one
+// (or publishes the results). A fresh token makes any older runner for this quiz exit.
+export async function launchRunner(quizId: string) {
+  const quiz = await getQuiz(quizId);
+  if (!quiz || quiz.status !== 'running') return;
+  quiz.runner = makeId('rn');
+  await saveQuiz(quiz);
+  const site = await siteUrl();
+  if (!site) return;
+  try {
+    await fetch(`${site}/.netlify/functions/quiz-runner-background`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-runner-secret': WEBHOOK_SECRET() },
+      body: JSON.stringify({ quizId, token: quiz.runner }),
+    });
+  } catch {
+    /* the 5-minute cron will relaunch a stalled quiz */
+  }
 }
 
 async function sendQuestion(quiz: QuizRecord, g: GroupRecord, idx: number): Promise<{ ok: boolean; error?: string }> {
@@ -115,12 +136,6 @@ export async function recordAnswer(pollId: string, user: { id: number; first_nam
   ]);
 }
 const seenUsers = new Set<string>();
-
-export async function onPollClosed(pollId: string) {
-  const m = await pollMap(pollId);
-  if (!m) return;
-  await advance(m.quizId, m.idx);
-}
 
 export async function advance(quizId: string, closedIdx: number) {
   const quiz = await getQuiz(quizId);
@@ -212,7 +227,7 @@ export async function finalizeQuiz(quizId: string) {
   let issued = 0;
   const results: ParticipantResult[] = top.map((r, i) => {
     const rank = i + 1;
-    const eligible = rank <= quiz.winnersCount && r.correct >= quiz.minScore && quotaLeft > 0;
+    const eligible = rank <= quiz.winnersCount && r.correct >= 1 && quotaLeft > 0;
     if (eligible) {
       quotaLeft--;
       issued++;
@@ -279,12 +294,16 @@ async function postResults(quiz: QuizRecord, g: GroupRecord, results: Participan
     const winners = results.filter(r => r.certificateIssued);
     if (winners.length) {
       text += `\n🎓 <b>Tabriklaymiz, g'oliblar!</b> Sertifikatingizni quyidagi tugma orqali oling.`;
+      const bot0 = await botUsername();
+      const short = process.env.MINIAPP_SHORTNAME || '';
       const site = await siteUrl();
-      if (site) {
-        for (const w of winners) {
-          rows.push([{ text: `🎓 ${w.rank}-o'rin: ${w.name}`.slice(0, 60), url: `${site}/cert.html?q=${quiz.id}&u=${w.userId}` }]);
-        }
+      for (const w of winners) {
+        // A t.me Mini App link opens directly (no "Open this link?" dialog); the site link is the fallback.
+        const url = bot0 && short ? `https://t.me/${bot0}/${short}?startapp=cert_${quiz.id}_${w.userId}` : site ? `${site}/cert.html?q=${quiz.id}&u=${w.userId}` : '';
+        if (url) rows.push([{ text: `🎓 ${w.rank}-o'rin: ${w.name}`.slice(0, 60), url }]);
       }
+    } else if (results.every(r => r.correctCount === 0)) {
+      text += `\nSertifikat olish uchun kamida 1 ta to'g'ri javob kerak.`;
     }
   }
   const bot = await botUsername();
@@ -362,11 +381,10 @@ export async function runDue(): Promise<void> {
       }
     }
   }
-  // Recover quizzes whose "poll closed" update never arrived.
-  for (const r of idx.running.filter(r => r.nextAt + 45000 < now)) {
+  // Recover quizzes whose background runner stopped (deploy, timeout): relaunch it.
+  for (const r of idx.running.filter(r => r.nextAt + 90000 < now)) {
     const q = await getQuiz(r.id);
-    if (q && q.status === 'running' && q.cursor !== undefined) await advance(q.id, q.cursor);
+    if (q && q.status === 'running') await launchRunner(q.id);
     else if (q) await updateIndex(q);
   }
 }
-

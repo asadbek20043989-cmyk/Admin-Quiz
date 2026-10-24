@@ -42,13 +42,7 @@ export async function listKeys(prefix: string): Promise<string[]> {
 import type { GroupRecord, QuizRecord, QuizSummary, AuditLogRecord } from '../../src/types/index.ts';
 import { uid } from './config.ts';
 
-// Guruh supergroup'ga ko'chganda eski chat id yangisiga yo'naltiriladi (`mig/<eski>` = yangi id).
-export async function getGroup(id: string): Promise<GroupRecord | null> {
-  const g = await getJSON<GroupRecord>(`g/${id}`);
-  if (g) return g;
-  const moved = await getText(`mig/${id}`);
-  return moved && moved !== id ? getJSON<GroupRecord>(`g/${moved}`) : null;
-}
+export const getGroup = (id: string) => getJSON<GroupRecord>(`g/${id}`);
 export const saveGroup = (g: GroupRecord) => setJSON(`g/${g.id}`, g);
 export const getQuiz = (id: string) => getJSON<QuizRecord>(`q/${id}`);
 export const saveQuiz = (q: QuizRecord) => setJSON(`q/${q.id}`, q);
@@ -59,25 +53,14 @@ export async function listAllGroups(): Promise<GroupRecord[]> {
   return all.filter(Boolean) as GroupRecord[];
 }
 
-// Foydalanuvchi kira oladigan guruhlar (guruh admini yoki yordamchi admin sifatida).
-// Huquqi qolmagan (masalan, guruh boshqa adminga qayta ulangan yoki yordamchi olib tashlangan) guruhlar chiqarib tashlanadi.
 export async function groupsOfAdmin(userId: string): Promise<GroupRecord[]> {
   const ids = (await getJSON<string[]>(`ug/${userId}`)) || [];
   const all = await Promise.all(ids.map(getGroup));
-  const seen = new Set<string>();
-  return (all.filter(Boolean) as GroupRecord[]).filter(g => {
-    if (seen.has(g.id)) return false;
-    seen.add(g.id);
-    return g.adminId === userId || !!g.helpers?.some(h => h.userId === userId);
-  });
+  return all.filter(Boolean) as GroupRecord[];
 }
 export async function addGroupToAdmin(userId: string, groupId: string) {
   const ids = (await getJSON<string[]>(`ug/${userId}`)) || [];
   if (!ids.includes(groupId)) await setJSON(`ug/${userId}`, [...ids, groupId]);
-}
-export async function removeGroupFromUser(userId: string, groupId: string) {
-  const ids = (await getJSON<string[]>(`ug/${userId}`)) || [];
-  if (ids.includes(groupId)) await setJSON(`ug/${userId}`, ids.filter(i => i !== groupId));
 }
 
 export function summarize(q: QuizRecord): QuizSummary {

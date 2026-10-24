@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { KeyRound, Megaphone, ScrollText, ShieldAlert, Users, LayoutDashboard, Copy, Check, Pause, Play, Trash2, Sliders, RotateCcw, Send } from 'lucide-react';
+import { KeyRound, Megaphone, ScrollText, ShieldAlert, Users, LayoutDashboard, Copy, Check, Pause, Play, Trash2, Sliders, RotateCcw } from 'lucide-react';
 import { api, ApiError, type OwnerOverview } from '../lib/api';
 import { confirmAction, copyText, haptic } from '../lib/tg';
 import type { AdRecord, AdminCodeRecord, AuditLogRecord, GroupRecord } from '../types';
@@ -200,16 +200,13 @@ function Groups({ toast }: T) {
 function LimitsModal({ group, onClose, onSaved, toast }: { group: GroupRecord; onClose: () => void; onSaved: (g: GroupRecord) => void; toast: T['toast'] }) {
   const [ai, setAi] = useState(group.plan.aiDailyQuota);
   const [cert, setCert] = useState(group.plan.certMonthlyQuota);
-  const [adPerWeek, setAdPerWeek] = useState(group.settings.adFrequencyPerWeek);
+  const [adMin, setAdMin] = useState(group.plan.adMinPerWeek);
+  const [adMax, setAdMax] = useState(group.plan.adMaxPerWeek);
   const [adFree, setAdFree] = useState(group.settings.adFree);
   const save = async () => {
     try {
-      await api.ownerLimits(group.id, { aiDailyQuota: ai, certMonthlyQuota: cert, adPerWeek, adFree });
-      onSaved({
-        ...group,
-        plan: { ...group.plan, aiDailyQuota: ai, certMonthlyQuota: cert, adMinPerWeek: adPerWeek, adMaxPerWeek: adPerWeek },
-        settings: { ...group.settings, adFree, adFrequencyPerWeek: adPerWeek },
-      });
+      await api.ownerLimits(group.id, { aiDailyQuota: ai, certMonthlyQuota: cert, adMinPerWeek: adMin, adMaxPerWeek: adMax, adFree });
+      onSaved({ ...group, plan: { ...group.plan, aiDailyQuota: ai, certMonthlyQuota: cert, adMinPerWeek: adMin, adMaxPerWeek: Math.max(adMin, adMax) }, settings: { ...group.settings, adFree } });
     } catch (e: any) {
       toast(e.message, false);
     }
@@ -220,10 +217,10 @@ function LimitsModal({ group, onClose, onSaved, toast }: { group: GroupRecord; o
       <div className="grid grid-cols-2 gap-3">
         <Field label="AI (kunlik)">{n(ai, setAi)}</Field>
         <Field label="Sertifikat (oylik)">{n(cert, setCert)}</Field>
-        <Field label="Reklama (haftasiga)" hint="Quiz tugagach chiqadigan reklamalar soni">{n(adPerWeek, setAdPerWeek)}</Field>
+        <Field label="Reklama min/hafta">{n(adMin, setAdMin)}</Field>
+        <Field label="Reklama max/hafta">{n(adMax, setAdMax)}</Field>
       </div>
       <label className="flex items-center gap-2 text-sm text-slate-200"><input type="checkbox" checked={adFree} onChange={e => setAdFree(e.target.checked)} className="accent-sky-500 w-4 h-4" /> Reklamasiz tarif</label>
-      <p className="text-[11px] text-slate-500">Reklama bilan faqat Super Admin ishlaydi: guruh adminlari reklamani ko'rmaydi va sozlay olmaydi.</p>
       <div className="flex justify-end gap-2"><Btn onClick={onClose}>Bekor</Btn><Btn tone="primary" onClick={save}>Saqlash</Btn></div>
     </Modal>
   );
@@ -312,42 +309,18 @@ function Codes({ toast }: T) {
 }
 
 // ------------------------------------------------------------------ ads
-// Guruhlarni tanlash: hech narsa tanlanmasa — reklama barcha (reklamasiz tarifdan tashqari) guruhlarga chiqadi.
-function GroupPicker({ groups, value, onChange }: { groups: GroupRecord[]; value: string[]; onChange: (v: string[]) => void }) {
-  if (!groups.length) return <p className="text-[11px] text-slate-500">Hali guruh ulanmagan.</p>;
-  return (
-    <div className="space-y-1.5 max-h-52 overflow-y-auto">
-      {groups.map(g => {
-        const on = value.includes(g.id);
-        return (
-          <button key={g.id} type="button" onClick={() => onChange(on ? value.filter(x => x !== g.id) : [...value, g.id])} className={`w-full text-left p-2.5 rounded-xl border flex items-center gap-2.5 cursor-pointer ${on ? 'border-indigo-500 bg-indigo-500/10' : 'border-slate-700 bg-slate-950'}`}>
-            <span className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${on ? 'bg-indigo-500 border-indigo-500' : 'border-slate-600'}`}>{on && <Check className="w-3 h-3 text-white" />}</span>
-            <span className="min-w-0 flex-1"><span className="block text-xs font-semibold text-slate-100 truncate">{g.title}</span><span className="block text-[10px] text-slate-500">{g.memberCount.toLocaleString()} a'zo{g.settings.adFree ? ' · reklamasiz tarif' : ''}{g.status !== 'active' ? ' · nofaol' : ''}</span></span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function Ads({ toast }: T) {
   const { data: ads, setData, error, reload } = useLoad<AdRecord[]>(api.ownerAds);
-  const { data: groups } = useLoad<GroupRecord[]>(api.ownerGroups);
   const [open, setOpen] = useState(false);
   const [f, setF] = useState({ title: '', text: '', imageUrl: '', buttonText: '', buttonUrl: '' });
-  const [targets, setTargets] = useState<string[]>([]);
-  const [manage, setManage] = useState<AdRecord | null>(null);
   if (error) return <ErrorBox message={error} onRetry={reload} />;
   if (!ads) return <Spinner />;
-  const gl = groups || [];
-  const targetLabel = (a: AdRecord) => (a.targetGroupIds.length === 0 ? 'Barcha guruhlar' : `${a.targetGroupIds.length} ta tanlangan guruh`);
   const create = async () => {
     try {
-      const r = await api.ownerCreateAd({ ...f, targetGroupIds: targets });
+      const r = await api.ownerCreateAd(f);
       setData([r.ad, ...ads]);
       setOpen(false);
       setF({ title: '', text: '', imageUrl: '', buttonText: '', buttonUrl: '' });
-      setTargets([]);
       toast('Reklama yaratildi');
     } catch (e: any) {
       toast(e.message, false);
@@ -356,16 +329,14 @@ function Ads({ toast }: T) {
   const bind = (k: keyof typeof f) => ({ value: f[k], onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setF({ ...f, [k]: e.target.value }) });
   return (
     <div className="space-y-3">
-      <Btn tone="primary" className="w-full py-3.5" onClick={() => setOpen(true)}><Megaphone className="w-4 h-4" /> Yangi hamkor reklama</Btn>
+      <Btn tone="primary" className="w-full py-3.5" onClick={() => setOpen(true)}><Megaphone className="w-4 h-4" /> Yangi reklama</Btn>
       {!ads.length && <Empty text="Reklama yo'q." />}
       {ads.map(a => (
         <Card key={a.id} className="space-y-2">
           <div className="flex items-center justify-between gap-2"><b className="text-sm truncate">{a.title}</b><Badge tone={a.status === 'active' ? 'emerald' : 'slate'}>{a.status === 'active' ? 'Faol' : 'Pauza'}</Badge></div>
           <div className="text-xs text-slate-400">{a.text}</div>
-          <div className="text-[11px] text-slate-500">Ko'rsatilgan: {a.impressions} · Bosilgan: {a.clicks}</div>
-          <div className="text-[11px] text-indigo-300">🎯 {targetLabel(a)}</div>
-          <div className="flex flex-wrap gap-2">
-            <Btn onClick={() => setManage(a)}><Send className="w-3.5 h-3.5" /> Guruhlar / yuborish</Btn>
+          <div className="text-[11px] text-slate-500">Guruhlarga chiqarilgan: {a.impressions} marta</div>
+          <div className="flex gap-2">
             <Btn onClick={async () => { try { await api.ownerToggleAd(a.id); setData(ads.map(x => (x.id === a.id ? { ...x, status: x.status === 'active' ? 'paused' : 'active' } : x))); } catch (e: any) { toast(e.message, false); } }}>{a.status === 'active' ? 'Pauza' : 'Yoqish'}</Btn>
             <Btn tone="danger" onClick={async () => { if (!(await confirmAction("Reklama o'chirilsinmi?"))) return; try { await api.ownerDeleteAd(a.id); setData(ads.filter(x => x.id !== a.id)); } catch (e: any) { toast(e.message, false); } }}><Trash2 className="w-3.5 h-3.5" /></Btn>
           </div>
@@ -373,69 +344,18 @@ function Ads({ toast }: T) {
       ))}
       {open && (
         <Modal title="Yangi reklama" onClose={() => setOpen(false)}>
-          <Field label="Sarlavha *"><input className={inputCls} maxLength={100} {...bind('title')} /></Field>
-          <Field label="Matn *"><textarea rows={3} maxLength={600} className={inputCls} {...bind('text')} /></Field>
+          <Field label="Nomi (faqat siz uchun, guruhda ko'rinmaydi)"><input className={inputCls} maxLength={100} {...bind('title')} /></Field>
+          <Field label="Reklama matni *" hint="Guruhga aynan shu matn yuboriladi, boshqa hech qanday qo'shimcha yozuvsiz."><textarea rows={4} maxLength={900} className={inputCls} {...bind('text')} /></Field>
           <Field label="Rasm havolasi (https, ixtiyoriy)"><input className={inputCls} {...bind('imageUrl')} /></Field>
           <div className="grid grid-cols-2 gap-2">
             <Field label="Tugma matni"><input className={inputCls} maxLength={40} {...bind('buttonText')} /></Field>
             <Field label="Tugma havolasi"><input className={inputCls} {...bind('buttonUrl')} /></Field>
           </div>
-          <div className="space-y-1.5">
-            <span className="block text-xs font-semibold text-slate-300">Qaysi guruhlarga chiqadi?</span>
-            <GroupPicker groups={gl} value={targets} onChange={setTargets} />
-            <p className="text-[11px] text-slate-500">{targets.length ? `${targets.length} ta guruh tanlandi.` : 'Hech biri tanlanmasa — barcha guruhlarga (reklamasiz tarifdagilardan tashqari).'} Reklama «Hamkor reklama» belgisi bilan, quiz natijalaridan keyin chiqadi.</p>
-          </div>
+          <p className="text-[11px] text-slate-500">Reklama guruhlarga quiz natijalaridan keyin, faqat shu matn (rasm va tugma bilan yoki usiz) ko'rinishida yuboriladi.</p>
           <div className="flex justify-end gap-2"><Btn onClick={() => setOpen(false)}>Bekor</Btn><Btn tone="primary" onClick={create}>Yaratish</Btn></div>
         </Modal>
       )}
-      {manage && (
-        <ManageAd
-          ad={manage}
-          groups={gl}
-          toast={toast}
-          onClose={() => setManage(null)}
-          onTargets={ids => { setData(ads.map(x => (x.id === manage.id ? { ...x, targetGroupIds: ids } : x))); setManage({ ...manage, targetGroupIds: ids }); }}
-        />
-      )}
     </div>
-  );
-}
-
-function ManageAd({ ad, groups, toast, onClose, onTargets }: { ad: AdRecord; groups: GroupRecord[]; toast: T['toast']; onClose: () => void; onTargets: (ids: string[]) => void }) {
-  const [sel, setSel] = useState<string[]>(ad.targetGroupIds);
-  const [busy, setBusy] = useState(false);
-  const saveTargets = async () => {
-    setBusy(true);
-    try {
-      await api.ownerAdTargets(ad.id, sel);
-      onTargets(sel);
-      toast('Maqsadli guruhlar saqlandi');
-    } catch (e: any) {
-      toast(e.message, false);
-    }
-    setBusy(false);
-  };
-  const sendNow = async () => {
-    if (!sel.length) return toast('Hozir yuborish uchun kamida bitta guruhni tanlang', false);
-    if (!(await confirmAction(`«${ad.title}» ${sel.length} ta guruhga hoziroq yuborilsinmi?`))) return;
-    setBusy(true);
-    try {
-      const r = await api.ownerSendAd(ad.id, sel);
-      toast(`${r.sent} ta guruhga yuborildi${r.failed.length ? `, yuborilmadi: ${r.failed.join(', ')}` : ''}`, r.failed.length === 0);
-    } catch (e: any) {
-      toast(e.message, false);
-    }
-    setBusy(false);
-  };
-  return (
-    <Modal title={`Guruhlar: ${ad.title}`} onClose={onClose}>
-      <GroupPicker groups={groups} value={sel} onChange={setSel} />
-      <p className="text-[11px] text-slate-500">Saqlash — reklama quiz tugagach shu guruhlarda avtomatik chiqadi (hech biri tanlanmasa — barcha guruhlarda). «Hozir yuborish» tanlangan guruhlarga darhol jo'natadi.</p>
-      <div className="grid grid-cols-2 gap-2">
-        <Btn busy={busy} onClick={saveTargets}>Saqlash</Btn>
-        <Btn tone="primary" busy={busy} onClick={sendNow}><Send className="w-3.5 h-3.5" /> Hozir yuborish</Btn>
-      </div>
-    </Modal>
   );
 }
 

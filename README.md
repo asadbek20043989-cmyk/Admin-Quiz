@@ -1,6 +1,6 @@
 # QuizBot AI — Telegram Mini App va viktorina boti
 
-Telegram guruhlari uchun AI viktorina boti. **Admin** va **Super Admin** — alohida oynalar.
+Telegram guruhlari uchun istalgan fandan AI viktorina boti (faqat o'zbek tilida). **Admin** va **Super Admin** — alohida oynalar.
 
 | Kim | Qayerdan kiradi | Himoya |
 |---|---|---|
@@ -21,13 +21,13 @@ Admin oynasida Super Admin tugmasi **yo'q**, Admin bundle'ida Super Admin kodi h
    - `BOT_TOKEN` — BotFather tokeni
    - `SUPER_ADMIN_IDS` — sizning Telegram ID'ingiz (bir nechta bo'lsa vergul bilan)
    - `GEMINI_API_KEY` — Google AI Studio kaliti
-   - ixtiyoriy: `GEMINI_MODEL` (standart `gemini-3.8-flash`; model 404 bersa zaxira modellar avtomatik sinaladi. Agar Netlify'da `GEMINI_MODEL=gemini-2.5-flash` qo'ygan bo'lsangiz — uni o'chiring), `SITE_URL`
+   - ixtiyoriy: `GEMINI_MODEL` (standart `gemini-2.5-flash`), `SITE_URL`
+   - tavsiya: `MINIAPP_SHORTNAME` — sertifikat tugmasi "Open this link?" oynasisiz ochilishi uchun (pastga qarang)
 3. Env o'zgaruvchilarni qo'shgach **qayta deploy** qiling.
 
 ## 3. Botni ulash (bir marta)
 1. Botga shaxsiy chatda `/owner` yozing → **Super Admin panelini ochish**.
 2. **Umumiy** bo'limida **🔌 Botni ulash (webhook)** tugmasini bosing. Hamma "Tizim holati" qatorlari yashil bo'lishi kerak.
-   (Yangilanishdan keyin ham bir marta qayta bosing — salomlashish uchun yangi `chat_member` yangilanishlari yoqiladi.)
 
 ## 4. Guruhni ulash
 1. Super Admin paneli → **Kodlar → Yangi ulanish kodi** (kod faqat bir marta ko'rsatiladi, 48 soat amal qiladi).
@@ -35,35 +35,30 @@ Admin oynasida Super Admin tugmasi **yo'q**, Admin bundle'ida Super Admin kodi h
 3. Admin guruhda yozadi: `/link QZ-XXXX-XXXX`. Faqat guruhning haqiqiy admini ulay oladi.
 4. Admin botga `/panel` yozadi → panel ochiladi.
 
-## Yordamchi adminlar (10 tagacha)
-Guruh admini **Sozlamalar → Yordamchilar** bo'limidan 10 tagacha yordamchi qo'sha oladi: bir martalik taklif havolasi yaratadi (yoki Telegram ID kiritadi) va har biriga vakolatni o'zi belgilaydi: quiz boshqaruvi, quizlarni o'chirish, guruh sozlamalari, moderatsiya, sertifikat, statistika. Yordamchi faqat o'ziga ruxsat berilgan bo'limlarni ko'radi (server ham tekshiradi). Yordamchilarni boshqarish faqat guruh adminida.
-
-## Reklama
-Reklama bilan **faqat Super Admin** ishlaydi (admin panelida Reklama bo'limi yo'q). Super Admin paneli → **Reklama**: reklama yaratadi, qaysi guruhlarga chiqishini tanlaydi (bo'sh = hamma guruh), tanlangan guruhlarga hoziroq yuboradi. Haftalik chastota **Guruhlar → Limitlar** da belgilanadi.
-
-## Yakunlangan quizni qayta boshlash
-**Tarix** → quizni oching → **Qayta boshlash**. Quiz yangi nusxa sifatida yuboriladi (eski natijalar tarixda saqlanadi). «Qoralama nusxa» — yuborilmasdan saqlanadi.
+## Sertifikat tugmasi oynasiz ochilishi uchun (bir martalik)
+1. BotFather → `/newapp` → botingizni tanlang → Web App URL: `https://SIZNING-SAYT.netlify.app/` → qisqa nom (masalan `panel`).
+2. Netlify env: `MINIAPP_SHORTNAME=panel` → qayta deploy.
+Shundan keyin g'oliblar tugmani bosganda sertifikat Telegram ichida to'g'ridan-to'g'ri ochiladi.
 
 ## Qanday ishlaydi
-- Quiz savollari guruhga **ketma-ket**, har biri non-anonymous Quiz Poll bo'lib yuboriladi. Keyingi savol oldingisi yopilganda Telegram yuboradigan yangilanish bilan yuboriladi (kutish uchun funksiya ishlamaydi → kredit sarflanmaydi).
+- Savollar guruhga ketma-ket yuboriladi. Admin har bir savol vaqtini (5–600 soniya) o'zi belgilaydi. Vaqt tugashi bilan keyingi savol **avtomatik** yuboriladi: quiz davomida kichik fon funksiyasi (`quiz-runner-background`) kutib turadi va aynan vaqtida uyg'onadi.
 - Natijalar: +1 ball to'g'ri javobga, tezlik uchun +0.5 gacha bonus. Tenglikda: ko'p to'g'ri javob, keyin kam vaqt.
-- G'oliblar guruhda ism bilan tegiladi va har biriga **sertifikat havolasi** (`/cert.html`) beriladi — sertifikat brauzerda chiziladi va PNG qilib yuklab olinadi.
-- Rejalashtirilgan quizlar va "tiqilib qolgan" quizlarni tiklash uchun har 5 daqiqada yengil `cron` ishlaydi (bitta kichik yozuvni o'qiydi, ish bo'lmasa darhol tugaydi).
+- Top-N o'rin olganlar (kamida 1 ta to'g'ri javob bilan) guruhda ism bilan tegiladi va har biriga sertifikat tugmasi beriladi. Sertifikat brauzerda chiziladi (fan nomi yozilmaydi).
+- Reklama: faqat Super Admin yaratgan matn (rasm/tugma bilan yoki usiz) quiz natijalaridan keyin yuboriladi, hech qanday qo'shimcha yozuvsiz.
+- Rejalashtirilgan quizlarni boshlash uchun har 5 daqiqada yengil `cron` ishlaydi (bitta kichik yozuvni o'qiydi, ish bo'lmasa darhol tugaydi).
 - Barcha statistika **noldan** boshlanadi. Ma'lumotlar Netlify Blobs'da saqlanadi.
 
 ## Netlify kreditini tejash
-- Faqat bitta API funksiyasi, bitta webhook, bitta cron (5 daqiqa).
-- Har bir ishtirokchi javobi = 1 ta webhook chaqiruvi (natijani hisoblash uchun zarur).
-- Anti-spam yoqilsa, guruhdagi har bir xabar tekshiriladi — katta guruhlarda chaqiruvlar ko'payadi. Shuning uchun u **standart holatda o'chiq**.
-- Cron chastotasini o'zgartirish: `netlify/functions/cron.ts` oxiridagi `schedule`.
+- Ish faqat quiz paytida sarflanadi: har ishtirokchi javobi = 1 ta qisqa chaqiruv, va quiz davomida bitta fon funksiyasi kutib turadi (masalan 10 savol × 30 s ≈ 5 daqiqa).
+- Quiz bo'lmaganda faqat 5 daqiqalik cron ishlaydi (oyiga ~8 600 juda qisqa chaqiruv). Rejalashtirilgan quizlardan foydalanmasangiz, `netlify/functions/cron.ts` dagi `schedule`ni `0 * * * *` (soatiga bir) qilib, deyarli nolga tushirishingiz mumkin.
+- Anti-spam yoqilsa, guruhdagi har bir xabar tekshiriladi, shuning uchun u **standart holatda o'chiq**.
 
 ## Muammolar
 - *Panel "Telegram orqali oching" deydi* — oddiy brauzerda emas, bot ichida oching.
 - *Owner "Ruxsat yo'q"* — `SUPER_ADMIN_IDS`da ID to'g'riligini va `BOT_TOKEN` borligini tekshiring, qayta deploy qiling.
 - *Guruhga yuborib bo'lmadi* — bot guruhda admin ekanini tekshiring.
-- *AI 404 xatosi* — Netlify'da `GEMINI_MODEL` eski modelga o'rnatilgan bo'lishi mumkin: o'chiring yoki `gemini-3.8-flash` qiling, qayta deploy qiling.
-- *Salom xabari chiqmayapti* — bot guruhda admin ekanini va «Salomlashish xabari» yoqilib «Saqlash» bosilganini tekshiring; «Sinab ko'rish» tugmasi bilan tekshiring.
-- *Quiz savollari orasida to'xtab qoldi* — 5 daqiqagacha ichida cron o'zi davom ettiradi.
+- *Quiz savollari orasida to'xtab qoldi* — cron 1,5–5 daqiqada fon funksiyasini qayta ishga tushiradi. Doim takrorlansa, Netlify → Functions bo'limida `quiz-runner-background` ko'rinishini tekshiring.
+- *Eski deploydan keyin* — Super Admin panelida **Webhook va buyruqlarni qayta o'rnatish** tugmasini bosing.
 
 ## Hozircha yo'q (keyingi qadamlar)
-Takrorlanuvchi (har kuni/haftada) quizlar, haftalik reytinglar, shaxsiy chatda AI "xatolar tahlili" (hozir saqlangan izohlar bilan), sertifikatni guruhga rasm sifatida yuborish.
+Takrorlanuvchi (har kuni/haftada) quizlar, haftalik reytinglar, sertifikatni guruhga tayyor rasm sifatida yuborish.

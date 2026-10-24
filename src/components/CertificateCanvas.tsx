@@ -7,7 +7,7 @@ interface CertificateCanvasProps {
   rank: number;
   score: number;
   totalQuestions: number;
-  topic: string;
+  topic?: string;
   groupTitle: string;
   date?: string;
   signatoryTitle?: string;
@@ -24,7 +24,6 @@ export const CertificateCanvas: React.FC<CertificateCanvasProps> = ({
   rank,
   score,
   totalQuestions,
-  topic,
   groupTitle,
   date = '',
   signatoryTitle = 'Guruh Admini',
@@ -89,7 +88,7 @@ export const CertificateCanvas: React.FC<CertificateCanvasProps> = ({
       // 3. Default: Modern Gold
       drawModernGold(ctx, width, height);
     }
-  }, [fontsReady, templateId, recipientName, rank, score, totalQuestions, topic, groupTitle, date, signatoryTitle, signatoryName, certId, width, height]);
+  }, [fontsReady, templateId, recipientName, rank, score, totalQuestions, groupTitle, date, signatoryTitle, signatoryName, certId, width, height]);
 
   // Template 1: Modern Gold
   const drawModernGold = (ctx: CanvasRenderingContext2D, w: number, h: number) => {
@@ -169,7 +168,7 @@ export const CertificateCanvas: React.FC<CertificateCanvasProps> = ({
 
     ctx.fillStyle = '#38bdf8';
     ctx.font = '600 17px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText(`Mavzu: "${topic}"`, w / 2, 335);
+    ctx.fillText('Bilimdonlik va tezkorlik uchun', w / 2, 335);
 
     ctx.fillStyle = '#e2e8f0';
     ctx.font = '500 14px "Plus Jakarta Sans", sans-serif';
@@ -262,7 +261,7 @@ export const CertificateCanvas: React.FC<CertificateCanvasProps> = ({
 
     ctx.fillStyle = '#38bdf8';
     ctx.font = '600 17px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText(`Maxsus mavzu: "${topic}"`, w / 2, 335);
+    ctx.fillText('Bilimdonlik va tezkorlik uchun', w / 2, 335);
 
     ctx.fillStyle = '#e2e8f0';
     ctx.font = '500 14px "Plus Jakarta Sans", sans-serif';
@@ -339,7 +338,7 @@ export const CertificateCanvas: React.FC<CertificateCanvasProps> = ({
 
     ctx.fillStyle = '#a7f3d0';
     ctx.font = '600 17px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText(`"${topic}" testi bo'yicha`, w / 2, 335);
+    ctx.fillText('Bilimdonlik va tezkorlik uchun', w / 2, 335);
 
     ctx.fillStyle = '#ffffff';
     ctx.font = '500 14px "Plus Jakarta Sans", sans-serif';

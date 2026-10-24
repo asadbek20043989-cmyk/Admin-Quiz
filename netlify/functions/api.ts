@@ -1,19 +1,16 @@
 import { randomInt } from 'node:crypto';
 import type {
-  AdminCodeRecord, AdRecord, BotHealth, CertificateTemplate, GroupRecord, HelperPerm, MeResponse, ModerationLog, QuestionRecord, QuizRecord, QuizSummary,
+  AdminCodeRecord, AdRecord, BotHealth, CertificateTemplate, GroupRecord, MeResponse, ModerationLog, QuestionRecord, QuizRecord, QuizSummary,
 } from '../../src/types/index.ts';
-import { HELPER_PERMS, MAX_HELPERS } from '../../src/types/index.ts';
 import { authenticate, displayName, type AuthedUser } from '../lib/auth.ts';
-import { audit, getGroup, getJSON, getQuiz, groupsOfAdmin, listAllGroups, removeSummary, saveGroup, saveQuiz, setJSON, updateIndex, upsertSummary, del } from '../lib/db.ts';
+import { getText, setText, audit, getGroup, getJSON, getQuiz, groupsOfAdmin, listAllGroups, removeSummary, saveGroup, saveQuiz, setJSON, updateIndex, upsertSummary, del } from '../lib/db.ts';
 import { botId, botUsername, sendMessage, tg } from '../lib/tg.ts';
 import { esc, uid, WEBHOOK_SECRET, BOT_TOKEN, GEMINI_KEY, SUPER_ADMIN_IDS } from '../lib/config.ts';
 import { refreshMemberCount, rollQuotas } from '../lib/groups.ts';
 import { generateQuiz } from '../lib/ai.ts';
 import { getStats, saveStats, snapshotMembers, toOverview } from '../lib/stats.ts';
-import { getAds, saveAds, sendAdNow, siteUrl } from '../lib/ads.ts';
-import { accessOf, cleanPerms, viewFor } from '../lib/access.ts';
-import { addHelper, createInvite, listInvites, removeHelper, revokeInvite } from '../lib/helpers.ts';
-import { hashCode, sendWelcomePreview, setupBot } from '../lib/bot.ts';
+import { getAds, saveAds, siteUrl } from '../lib/ads.ts';
+import { hashCode, setupBot } from '../lib/bot.ts';
 import { publicCertificate, startQuiz, stopQuiz } from '../lib/quizEngine.ts';
 
 const json = (data: unknown, status = 200) =>
@@ -38,34 +35,15 @@ class HttpError extends Error {
   }
 }
 
-// Guruhga kirish: guruh admini yoki yordamchi admin. Boshqalarga 403.
 async function ownGroup(me: AuthedUser, gid: string): Promise<GroupRecord> {
   const g = await getGroup(gid);
-  if (!g || !accessOf(g, me.user.id)) throw new HttpError(403, "Bu guruhga ruxsatingiz yo'q");
+  if (!g || g.adminId !== String(me.user.id)) throw new HttpError(403, "Bu guruhga ruxsatingiz yo'q");
   return g;
 }
-// Aniq vakolat talab qiladigan amallar uchun.
-function need(g: GroupRecord, me: AuthedUser, perm: HelperPerm) {
-  const a = accessOf(g, me.user.id);
-  if (!a || !a.perms.includes(perm)) {
-    const label = HELPER_PERMS.find(p => p.id === perm)?.label || perm;
-    throw new HttpError(403, `Bu amal uchun sizda vakolat yo'q (${label}). Guruh admini sizga ruxsat berishi kerak.`);
-  }
-}
-function adminOnly(g: GroupRecord, me: AuthedUser) {
-  if (accessOf(g, me.user.id)?.role !== 'admin') throw new HttpError(403, 'Bu amalni faqat guruh admini bajara oladi');
-}
-async function ownQuiz(me: AuthedUser, qid: string, perm: HelperPerm = 'quiz'): Promise<{ quiz: QuizRecord; group: GroupRecord }> {
+async function ownQuiz(me: AuthedUser, qid: string): Promise<{ quiz: QuizRecord; group: GroupRecord }> {
   const quiz = await getQuiz(qid);
   if (!quiz) throw new HttpError(404, 'Quiz topilmadi');
-  const group = await ownGroup(me, quiz.groupId);
-  need(group, me, perm);
-  if (quiz.groupId !== group.id) {
-    // Guruh supergroup'ga ko'chgan: quiz yozuvini yangi id'ga moslaymiz.
-    quiz.groupId = group.id;
-    await saveQuiz(quiz);
-  }
-  return { quiz, group };
+  return { quiz, group: await ownGroup(me, quiz.groupId) };
 }
 const activeOnly = (g: GroupRecord) => {
   if (g.status !== 'active') throw new HttpError(403, "Guruh hozir faol emas (to'xtatilgan yoki bot olib tashlangan)");
@@ -73,17 +51,6 @@ const activeOnly = (g: GroupRecord) => {
 
 export default async (req: Request) => {
   const url = new URL(req.url);
-
-  // ---- Ad click tracking: /r/:adId/:groupId
-  if (url.pathname.startsWith('/r/')) {
-    const [, , adId] = url.pathname.split('/');
-    const ads = await getAds();
-    const ad = ads.find(a => a.id === adId);
-    if (!ad || !ad.buttonUrl || !/^https?:\/\//i.test(ad.buttonUrl)) return new Response('Not found', { status: 404 });
-    ad.clicks += 1;
-    await saveAds(ads);
-    return Response.redirect(ad.buttonUrl, 302);
-  }
 
   const parts = url.pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
   const method = req.method;
@@ -110,13 +77,7 @@ export default async (req: Request) => {
     if (parts[0] === 'me' && method === 'GET') {
       const groups = await groupsOfAdmin(String(me.user.id));
       for (const g of groups) await maintainGroup(g);
-      const fresh = await groupsOfAdmin(String(me.user.id));
-      const out: MeResponse = {
-        user: me.user,
-        isOwner: me.isOwner,
-        groups: fresh.map(g => viewFor(g, me.user.id)!).filter(Boolean),
-        botUsername: await botUsername(),
-      };
+      const out: MeResponse = { user: me.user, isOwner: me.isOwner, groups: await groupsOfAdmin(String(me.user.id)), botUsername: await botUsername() };
       return json(out);
     }
 
@@ -126,15 +87,12 @@ export default async (req: Request) => {
       const g = await ownGroup(me, parts[1]);
       const sub = parts[2];
 
-      if (!sub && method === 'GET') return json(viewFor(g, me.user.id));
+      if (!sub && method === 'GET') return json(g);
 
       if (sub === 'health' && method === 'GET') return json(await health(g));
 
       if (sub === 'settings' && method === 'PATCH') {
         const b: any = body;
-        const touches = (keys: string[]) => keys.some(k => b[k] !== undefined);
-        if (touches(['autoApproveJoin', 'welcomeEnabled', 'welcomeMessage', 'rules', 'explainEnabled'])) need(g, me, 'settings');
-        if (touches(['antiSpamEnabled', 'filterLinks', 'filterForwards', 'bannedWords'])) need(g, me, 'moderation');
         const s = g.settings;
         for (const k of ['autoApproveJoin', 'welcomeEnabled', 'antiSpamEnabled', 'filterLinks', 'filterForwards', 'explainEnabled'] as const) {
           if (typeof b[k] === 'boolean') s[k] = b[k];
@@ -144,11 +102,10 @@ export default async (req: Request) => {
         if (Array.isArray(b.bannedWords)) s.bannedWords = [...new Set(b.bannedWords.map((w: unknown) => str(w, 40).toLowerCase()).filter(Boolean))].slice(0, 100) as string[];
         await saveGroup(g);
         await audit(displayName(me.user), 'SOZLAMALAR_YANGILANDI', `«${g.title}» sozlamalari yangilandi`, g.id);
-        return json({ success: true, group: viewFor(g, me.user.id) });
+        return json({ success: true, group: g });
       }
 
       if (sub === 'certificate-settings' && method === 'PATCH') {
-        need(g, me, 'certificate');
         const b: any = body;
         const c = g.certificateSettings;
         if (TEMPLATES.some(t => t.id === b.templateId)) c.templateId = b.templateId;
@@ -157,73 +114,20 @@ export default async (req: Request) => {
         if (b.signatoryTitle !== undefined) c.signatoryTitle = str(b.signatoryTitle, 60) || c.signatoryTitle;
         if (b.signatoryName !== undefined) c.signatoryName = str(b.signatoryName, 60) || c.signatoryName;
         await saveGroup(g);
-        return json({ success: true, group: viewFor(g, me.user.id) });
+        return json({ success: true, group: g });
       }
 
       if (sub === 'stats' && method === 'GET') {
-        need(g, me, 'stats');
         await refreshMemberCount(g);
         await saveGroup(g);
         return json(toOverview(g, await getStats(g.id)));
       }
 
       if (sub === 'moderation' && method === 'GET') {
-        need(g, me, 'moderation');
         return json({ logs: (await getJSON<ModerationLog[]>(`mod/${g.id}`)) || [] });
       }
 
-      // ---- Yordamchi adminlar (faqat guruh admini boshqaradi)
-      if (sub === 'helpers') {
-        adminOnly(g, me);
-        const hid = parts[3];
-        if (!hid && method === 'GET') return json({ helpers: g.helpers || [], invites: await listInvites(g.id), max: MAX_HELPERS, botUsername: await botUsername() });
-        if (hid === 'invite' && method === 'POST') {
-          if ((g.helpers?.length || 0) >= MAX_HELPERS) return err(`Yordamchi adminlar soni ${MAX_HELPERS} tadan oshmasligi kerak`);
-          const r = await createInvite(g, cleanPerms((body as any).perms), String(me.user.id));
-          if (!r.ok) return err(r.error || 'Taklif yaratilmadi');
-          const bot = await botUsername();
-          return json({ success: true, code: r.code, link: `https://t.me/${bot}?start=helper_${r.code}` });
-        }
-        if (hid === 'invite' && parts[4] && method === 'DELETE') {
-          await revokeInvite(g.id, parts[4]);
-          return json({ success: true });
-        }
-        if (!hid && method === 'POST') {
-          // Telegram ID bo'yicha qo'lda qo'shish (foydalanuvchi guruh a'zosi bo'lishi shart)
-          const uidRaw = str((body as any).userId, 20);
-          if (!/^\d{5,15}$/.test(uidRaw)) return err("Telegram ID faqat raqamlardan iborat bo'lishi kerak");
-          const info = await tg<any>('getChatMember', { chat_id: g.tgChatId, user_id: Number(uidRaw) });
-          if (!info.ok || !info.result?.user) return err("Foydalanuvchi guruhdan topilmadi. U guruh a'zosi bo'lishi kerak.");
-          const r = await addHelper(g, info.result.user, cleanPerms((body as any).perms), displayName(me.user));
-          if (!r.ok) return err(r.error || "Qo'shib bo'lmadi");
-          return json({ success: true, helpers: g.helpers });
-        }
-        if (hid && hid !== 'invite' && method === 'PATCH') {
-          const h = g.helpers?.find(x => x.userId === hid);
-          if (!h) return err('Yordamchi topilmadi', 404);
-          const perms = cleanPerms((body as any).perms);
-          if (!perms.length) return err('Kamida bitta vakolat qoldiring yoki yordamchini olib tashlang');
-          h.perms = perms;
-          await saveGroup(g);
-          await audit(displayName(me.user), 'YORDAMCHI_VAKOLATI', `${h.name} vakolatlari yangilandi («${g.title}»)`, g.id);
-          return json({ success: true, helpers: g.helpers });
-        }
-        if (hid && hid !== 'invite' && method === 'DELETE') {
-          if (!(await removeHelper(g, hid, displayName(me.user)))) return err('Yordamchi topilmadi', 404);
-          return json({ success: true, helpers: g.helpers });
-        }
-      }
-
-      // Salomlashish xabarini sinab ko'rish: guruhga namunaviy xabar yuboradi va so'rovchini tag qiladi
-      if (sub === 'welcome-test' && method === 'POST') {
-        need(g, me, 'settings');
-        activeOnly(g);
-        await sendWelcomePreview(g, me.user);
-        return json({ success: true });
-      }
-
       if (sub === 'quizzes') {
-        need(g, me, 'quiz');
         if (parts[3] === 'generate' && method === 'POST') {
           activeOnly(g);
           const b: any = body;
@@ -234,10 +138,9 @@ export default async (req: Request) => {
           try {
             const r = await generateQuiz({
               topic,
-              difficulty: ['beginner', 'elementary', 'intermediate', 'upper_intermediate', 'advanced'].includes(b.difficulty) ? b.difficulty : 'intermediate',
+              difficulty: ['easy', 'medium', 'hard'].includes(b.difficulty) ? b.difficulty : 'medium',
               questionCount: num(b.questionCount, 1, 30, 5),
               optionsCount: num(b.optionsCount, 3, 4, 4),
-              language: b.language === 'en' ? 'en' : 'uz',
             });
             g.plan.aiDailyUsed += 1;
             await saveGroup(g);
@@ -252,45 +155,13 @@ export default async (req: Request) => {
     }
 
     if (parts[0] === 'quizzes' && parts[1]) {
-      const { quiz, group } = await ownQuiz(me, parts[1], method === 'DELETE' && !parts[2] ? 'deleteQuiz' : 'quiz');
+      const { quiz, group } = await ownQuiz(me, parts[1]);
       if (!parts[2] && method === 'GET') return json(quiz);
       if (parts[2] === 'send' && method === 'POST') {
         const r = await startQuiz(quiz.id);
         if (!r.ok) return err(r.error || 'Yuborib bo\'lmadi', 409);
         await audit(displayName(me.user), 'QUIZ_YUBORILDI', `«${quiz.topic}» guruhga yuborildi`, group.id);
         return json({ success: true });
-      }
-      if (parts[2] === 'restart' && method === 'POST') {
-        // Yakunlangan (yoki bekor qilingan) quizni YANGI nusxa sifatida qayta boshlaydi:
-        // eski natijalar tarixda saqlanadi, yangi urinish alohida hisoblanadi.
-        activeOnly(group);
-        if (quiz.status !== 'finished' && quiz.status !== 'cancelled') return err("Faqat yakunlangan yoki bekor qilingan quizni qayta boshlash mumkin");
-        const mode = (body as any).mode === 'draft' ? 'draft' : 'now';
-        const stamp = Date.now();
-        const copy: QuizRecord = {
-          id: uid('qz'),
-          groupId: group.id,
-          topic: quiz.topic,
-          difficulty: quiz.difficulty,
-          questionCount: quiz.questions.length,
-          secondsPerQuestion: quiz.secondsPerQuestion,
-          language: quiz.language,
-          status: 'draft',
-          winnersCount: quiz.winnersCount,
-          minScore: quiz.minScore,
-          createdAt: new Date().toISOString(),
-          createdBy: String(me.user.id),
-          questions: quiz.questions.map((q, i) => ({ ...q, id: `q-${stamp}-${i + 1}` })),
-        };
-        await saveQuiz(copy);
-        await upsertSummary(copy);
-        await updateIndex(copy);
-        await audit(displayName(me.user), 'QUIZ_QAYTA_BOSHLANDI', `«${copy.topic}» qayta ${mode === 'now' ? 'yuborildi' : 'qoralama qilindi'}`, group.id);
-        if (mode === 'now') {
-          const r = await startQuiz(copy.id);
-          if (!r.ok) return json({ success: false, error: `${r.error} (quiz qoralama sifatida saqlandi)`, quiz: await getQuiz(copy.id) }, 409);
-        }
-        return json({ success: true, quiz: await getQuiz(copy.id) });
       }
       if (parts[2] === 'stop' && method === 'POST') {
         await stopQuiz(quiz.id);
@@ -314,7 +185,7 @@ export default async (req: Request) => {
   }
 };
 
-export const config = { path: ['/api/*', '/r/*'] };
+export const config = { path: '/api/*' };
 
 // ---------------------------------------------------------------------------
 async function maintainGroup(g: GroupRecord) {
@@ -392,14 +263,14 @@ async function createQuiz(g: GroupRecord, me: AuthedUser, b: any) {
     id: uid('qz'),
     groupId: g.id,
     topic,
-    difficulty: ['beginner', 'elementary', 'intermediate', 'upper_intermediate', 'advanced'].includes(b.difficulty) ? b.difficulty : 'intermediate',
+    difficulty: ['easy', 'medium', 'hard'].includes(b.difficulty) ? b.difficulty : 'medium',
     questionCount: questions.length,
     secondsPerQuestion: num(b.secondsPerQuestion, 5, 600, 30),
-    language: b.language === 'en' ? 'en' : 'uz',
+    language: 'uz',
     status: mode === 'schedule' ? 'scheduled' : 'draft',
     scheduledAt,
     winnersCount: num(b.winnersCount, 1, 10, g.certificateSettings.winnersCount),
-    minScore: num(b.minScore, 0, questions.length, g.certificateSettings.minScore),
+    minScore: 1,
     createdAt: new Date().toISOString(),
     createdBy: String(me.user.id),
     questions,
@@ -430,6 +301,7 @@ async function ownerRoutes(p: string[], method: string, req: Request, me: Authed
       rollQuotas(g);
       aiToday += g.plan.aiDailyUsed;
     }
+    if (!(await getText('cfg/site'))) await setText('cfg/site', new URL(req.url).origin);
     const hook = await tg<any>('getWebhookInfo');
     return json({
       groups: groups.length,
@@ -462,14 +334,10 @@ async function ownerRoutes(p: string[], method: string, req: Request, me: Authed
     if (p[2] === 'limits' && method === 'PATCH') {
       g.plan.aiDailyQuota = num(body.aiDailyQuota, 0, 1000, g.plan.aiDailyQuota);
       g.plan.certMonthlyQuota = num(body.certMonthlyQuota, 0, 100000, g.plan.certMonthlyQuota);
-      // Reklama chastotasini faqat Super Admin belgilaydi (guruh adminlari reklamaga aralasha olmaydi).
-      if (body.adPerWeek !== undefined) {
-        const f = num(body.adPerWeek, 0, 14, g.plan.adMinPerWeek);
-        g.plan.adMinPerWeek = f;
-        g.plan.adMaxPerWeek = f;
-        g.settings.adFrequencyPerWeek = f;
-      }
+      g.plan.adMinPerWeek = num(body.adMinPerWeek, 0, 14, g.plan.adMinPerWeek);
+      g.plan.adMaxPerWeek = Math.max(g.plan.adMinPerWeek, num(body.adMaxPerWeek, 0, 14, g.plan.adMaxPerWeek));
       if (typeof body.adFree === 'boolean') g.settings.adFree = body.adFree;
+      g.settings.adFrequencyPerWeek = Math.min(Math.max(g.settings.adFrequencyPerWeek, g.plan.adMinPerWeek), g.plan.adMaxPerWeek);
       await saveGroup(g);
       await audit(actor, 'LIMITLAR_YANGILANDI', `«${g.title}» limitlari o'zgartirildi`, g.id);
       return json({ success: true, group: g });
@@ -536,8 +404,9 @@ async function ownerRoutes(p: string[], method: string, req: Request, me: Authed
     const ads = await getAds();
     if (!p[1] && method === 'GET') return json(ads);
     if (!p[1] && method === 'POST') {
-      const title = str(body.title, 100), text = str(body.text, 600);
-      if (!title || !text) return err('Sarlavha va matn kiritilishi shart');
+      const text = str(body.text, 900);
+      if (!text) return err('Reklama matnini kiriting');
+      const title = str(body.title, 100) || text.slice(0, 40);
       const bu = str(body.buttonUrl, 300);
       if (bu && !/^https?:\/\//i.test(bu)) return err("Tugma havolasi http(s):// bilan boshlanishi kerak");
       const ad: AdRecord = {
@@ -545,7 +414,7 @@ async function ownerRoutes(p: string[], method: string, req: Request, me: Authed
         imageUrl: /^https:\/\//i.test(str(body.imageUrl, 400)) ? str(body.imageUrl, 400) : undefined,
         buttonText: str(body.buttonText, 40) || undefined,
         buttonUrl: bu || undefined,
-        targetGroupIds: Array.isArray(body.targetGroupIds) ? [...new Set<string>(body.targetGroupIds.map(String))] : [],
+        targetGroupIds: Array.isArray(body.targetGroupIds) ? body.targetGroupIds.map(String) : [],
         status: 'active', impressions: 0, clicks: 0, createdAt: new Date().toISOString(),
       };
       await saveAds([ad, ...ads]);
@@ -554,22 +423,8 @@ async function ownerRoutes(p: string[], method: string, req: Request, me: Authed
     }
     const ad = ads.find(a => a.id === p[1]);
     if (!ad) return err('Reklama topilmadi', 404);
-    if (p[2] === 'send' && method === 'POST') {
-      // Tanlangan guruhlarga hoziroq yuborish
-      const ids: string[] = Array.isArray(body.groupIds) ? body.groupIds.map(String) : [];
-      if (!ids.length) return err('Kamida bitta guruhni tanlang');
-      const all = await listAllGroups();
-      const targets = all.filter(g => ids.includes(g.id));
-      const r = await sendAdNow(ad.id, targets);
-      await audit(actor, 'REKLAMA_YUBORILDI', `«${ad.title}» ${r.sent}/${targets.length} guruhga yuborildi`);
-      return json({ success: true, ...r });
-    }
     if (method === 'PATCH') {
-      if (Array.isArray(body.targetGroupIds)) {
-        // Qaysi guruhlarga reklama chiqishini Super Admin belgilaydi (bo'sh = barcha guruhlar)
-        ad.targetGroupIds = [...new Set<string>(body.targetGroupIds.map(String))];
-        await audit(actor, 'REKLAMA_MAQSADI', `«${ad.title}» uchun ${ad.targetGroupIds.length || 'barcha'} guruh belgilandi`);
-      } else ad.status = ad.status === 'active' ? 'paused' : 'active';
+      ad.status = ad.status === 'active' ? 'paused' : 'active';
       await saveAds(ads);
       return json({ success: true, ad });
     }

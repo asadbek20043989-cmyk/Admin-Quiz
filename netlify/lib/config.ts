@@ -17,9 +17,7 @@ export const WEBHOOK_SECRET = () =>
 export const CODE_PEPPER = () => createHash('sha256').update('qb-code:' + BOT_TOKEN()).digest('hex');
 
 export const GEMINI_KEY = () => process.env.GEMINI_API_KEY || '';
-// gemini-2.5-* modellari Google tomonidan o'chirilgan (404 beradi). Yangi modellar ketma-ket sinab ko'riladi.
-export const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-export const GEMINI_FALLBACKS = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-flash-latest'];
+export const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 // Asia/Tashkent is UTC+5 with no DST.
 const TZ_OFFSET_MS = 5 * 3600 * 1000;

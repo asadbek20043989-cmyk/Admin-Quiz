@@ -16,13 +16,11 @@ const renumber = (qs: QuestionRecord[]) => qs.map((q, i) => ({ ...q, position: i
 
 export const QuizCreatorPage: React.FC<Props> = ({ group, onDone, toast }) => {
   const [topic, setTopic] = useState('');
-  const [difficulty, setDifficulty] = useState<Difficulty>('intermediate');
+  const [difficulty, setDifficulty] = useState<Difficulty>('medium');
   const [count, setCount] = useState(5);
   const [seconds, setSeconds] = useState(30);
   const [optionsCount, setOptionsCount] = useState(4);
-  const [language, setLanguage] = useState<'uz' | 'en'>('uz');
   const [winners, setWinners] = useState(group.certificateSettings.winnersCount);
-  const [minScore, setMinScore] = useState(group.certificateSettings.minScore);
   const [mode, setMode] = useState<'now' | 'schedule'>('now');
   const [when, setWhen] = useState('');
   const [questions, setQuestions] = useState<QuestionRecord[]>([]);
@@ -40,7 +38,7 @@ export const QuizCreatorPage: React.FC<Props> = ({ group, onDone, toast }) => {
     setError('');
     setGenerating(true);
     try {
-      const r = await api.generate(group.id, { topic: topic.trim(), difficulty, questionCount: count, optionsCount, language });
+      const r = await api.generate(group.id, { topic: topic.trim(), difficulty, questionCount: count, optionsCount });
       setQuestions(r.questions);
       if (r.questions.length < count) toast(`AI faqat ${r.questions.length} ta sifatli savol tuza oldi. Qo'shimcha savolni qo'lda qo'shishingiz mumkin.`, false);
     } catch (e: any) {
@@ -80,9 +78,9 @@ export const QuizCreatorPage: React.FC<Props> = ({ group, onDone, toast }) => {
         topic: topic.trim() || 'Quiz',
         difficulty,
         secondsPerQuestion: seconds,
-        language,
+        language: 'uz',
         winnersCount: winners,
-        minScore: Math.min(minScore, questions.length),
+        minScore: 1,
         questions,
         mode: m,
         // datetime-local is entered as Tashkent time (UTC+5) regardless of the phone's timezone
@@ -106,21 +104,19 @@ export const QuizCreatorPage: React.FC<Props> = ({ group, onDone, toast }) => {
 
       <Card className="space-y-3">
         <Field label="Mavzu *">
-          <input className={inputCls} value={topic} onChange={e => setTopic(e.target.value)} placeholder="Masalan: Present Perfect, Articles, Phrasal Verbs" maxLength={120} />
+          <input className={inputCls} value={topic} onChange={e => setTopic(e.target.value)} placeholder="Istalgan fan yoki mavzu: Tarix, Biologiya, Fizika..." maxLength={120} />
         </Field>
         <div className="flex gap-1.5 overflow-x-auto scrollbar-none pb-1">
-          {['Past Simple vs Present Perfect', 'Conditionals', 'Articles', 'Prepositions', 'Modal Verbs', 'IELTS Vocabulary'].map(t => (
+          {['Matematika', 'Tarix', 'Biologiya', 'Geografiya', 'Ona tili', 'Ingliz tili', 'Informatika', 'Fizika'].map(t => (
             <button key={t} onClick={() => setTopic(t)} className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-[11px] shrink-0 cursor-pointer">{t}</button>
           ))}
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Qiyinlik">
             <select className={inputCls} value={difficulty} onChange={e => setDifficulty(e.target.value as Difficulty)}>
-              <option value="beginner">A1 — Boshlang'ich</option>
-              <option value="elementary">A2 — Elementar</option>
-              <option value="intermediate">B1 — O'rta</option>
-              <option value="upper_intermediate">B2 — Kuchli</option>
-              <option value="advanced">C1 — Yuqori</option>
+              <option value="easy">Oson</option>
+              <option value="medium">O'rta</option>
+              <option value="hard">Qiyin</option>
             </select>
           </Field>
           <Field label="Savollar soni">
@@ -128,31 +124,29 @@ export const QuizCreatorPage: React.FC<Props> = ({ group, onDone, toast }) => {
               {[3, 5, 10, 15, 20, 30].map(n => <option key={n} value={n}>{n} ta</option>)}
             </select>
           </Field>
-          <Field label="Savolga vaqt">
-            <select className={inputCls} value={seconds} onChange={e => setSeconds(Number(e.target.value))}>
-              {[15, 20, 30, 45, 60, 90].map(n => <option key={n} value={n}>{n} soniya</option>)}
-            </select>
-          </Field>
+          <div className="col-span-2">
+            <Field label="Har bir savol uchun vaqt (soniya)" hint="5 dan 600 soniyagacha. Vaqt tugashi bilan keyingi savol avtomatik yuboriladi.">
+              <input type="number" inputMode="numeric" min={5} max={600} className={inputCls} value={seconds || ''} onChange={e => setSeconds(Number(e.target.value))} onBlur={() => setSeconds(s => Math.max(5, Math.min(600, Math.round(s) || 30)))} />
+            </Field>
+            <div className="flex gap-1.5 mt-2 flex-wrap">
+              {[15, 20, 30, 45, 60, 90, 120].map(n => (
+                <button key={n} type="button" onClick={() => setSeconds(n)} className={`px-2.5 py-1 rounded-lg text-[11px] cursor-pointer ${seconds === n ? 'bg-sky-500 text-white' : 'bg-slate-800 text-slate-300'}`}>{n}s</button>
+              ))}
+            </div>
+          </div>
           <Field label="Variantlar soni">
             <select className={inputCls} value={optionsCount} onChange={e => setOptionsCount(Number(e.target.value))}>
               <option value={3}>3 ta</option>
               <option value={4}>4 ta</option>
             </select>
           </Field>
-          <Field label="Izoh tili">
-            <select className={inputCls} value={language} onChange={e => setLanguage(e.target.value as 'uz' | 'en')}>
-              <option value="uz">O'zbekcha</option>
-              <option value="en">English</option>
-            </select>
-          </Field>
+
           <Field label="Sertifikat (g'oliblar)">
             <select className={inputCls} value={winners} onChange={e => setWinners(Number(e.target.value))}>
               {[1, 3, 5, 10].map(n => <option key={n} value={n}>Top-{n}</option>)}
             </select>
           </Field>
-          <Field label="Minimal to'g'ri javob" hint="Sertifikat uchun shart">
-            <input type="number" className={inputCls} min={0} max={30} value={minScore} onChange={e => setMinScore(Number(e.target.value))} />
-          </Field>
+
         </div>
         <Btn tone="primary" onClick={generate} busy={generating} disabled={inactive} className="w-full py-3.5">
           <Sparkles className="w-4 h-4" /> {generating ? 'AI savollarni tuzmoqda...' : questions.length ? 'Qayta generatsiya qilish' : 'AI bilan savollar yaratish'}
@@ -194,7 +188,7 @@ export const QuizCreatorPage: React.FC<Props> = ({ group, onDone, toast }) => {
               <button onClick={() => setMode('schedule')} className={`py-2.5 rounded-xl text-xs font-bold border cursor-pointer ${mode === 'schedule' ? 'bg-sky-500/20 border-sky-500 text-sky-300' : 'bg-slate-950 border-slate-700 text-slate-400'}`}>Rejalashtirish</button>
             </div>
             {mode === 'schedule' && (
-              <Field label="Boshlanish vaqti (Toshkent vaqti)" hint="Rejalashtirilgan quizlar har 5 daqiqada tekshiriladi, shuning uchun boshlanish 5 daqiqagacha kechikishi mumkin.">
+              <Field label="Boshlanish vaqti (Toshkent vaqti)" hint="Rejalashtirilgan quiz belgilangan vaqtdan keyin 5 daqiqagacha kechikib boshlanishi mumkin.">
                 <input type="datetime-local" className={inputCls} value={when} onChange={e => setWhen(e.target.value)} />
               </Field>
             )}
@@ -206,7 +200,7 @@ export const QuizCreatorPage: React.FC<Props> = ({ group, onDone, toast }) => {
                 <Btn tone="primary" onClick={() => submit('schedule')} busy={saving} disabled={inactive}><CalendarClock className="w-3.5 h-3.5" /> Rejalashtirish</Btn>
               )}
             </div>
-            <p className="text-[11px] text-slate-500">Savollar guruhga ketma-ket, har biri {seconds} soniyalik anonim bo'lmagan Quiz Poll shaklida yuboriladi. Oxirida natijalar va sertifikat tugmalari e'lon qilinadi.</p>
+            <p className="text-[11px] text-slate-500">Savollar guruhga ketma-ket, har biri {seconds} soniya ochiq turadi; vaqt tugashi bilan keyingisi o'zi yuboriladi. Oxirida natijalar e'lon qilinadi va o'rin olganlar sertifikat tugmasini oladi.</p>
           </Card>
         </div>
       )}
