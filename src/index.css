@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+html, body { background: #020617; font-family: "Plus Jakarta Sans", system-ui, sans-serif; -webkit-tap-highlight-color: transparent; }
+body { padding-bottom: env(safe-area-inset-bottom); }
+
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(12px) } to { opacity: 1; transform: translateY(0) } }
+.animate-fadeIn { animation: fadeIn .2s ease-out both }
+.animate-slideUp { animation: slideUp .25s ease-out both }
+.scrollbar-none { scrollbar-width: none }
+.scrollbar-none::-webkit-scrollbar { display: none }
