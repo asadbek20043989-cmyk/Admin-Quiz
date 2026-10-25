@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { AdminCodeRecord, ModerationLog } from '../../src/types/index.ts';
 import { CODE_PEPPER, esc, isOwnerId, SUPER_ADMIN_IDS, uid } from './config.ts';
-import { addGroupToAdmin, audit, getGroup, getJSON, groupsOfAdmin, saveGroup, setJSON, setText } from './db.ts';
+import { addGroupToAdmin, audit, del, getGroup, getJSON, groupsOfAdmin, saveGroup, setJSON, setText } from './db.ts';
 import { botId, botUsername, isChatAdmin, sendMessage, tg } from './tg.ts';
 import { newGroup, migrateGroup } from './groups.ts';
 import { recordAnswer, reviewText, stopQuiz } from './quizEngine.ts';
@@ -111,6 +111,7 @@ async function onPrivateCommand(m: any, text: string) {
   }
 
   if (cmd === '/start') {
+    if (arg.startsWith('helper_')) return acceptHelper(arg.slice(7).toUpperCase(), from, chatId);
     if (arg.startsWith('review_')) {
       return sendMessage(chatId, await reviewText(arg.slice(7), String(from.id)));
     }
@@ -125,6 +126,30 @@ async function onPrivateCommand(m: any, text: string) {
     if (owner) txt += '\n\nSuper Admin paneli: /owner';
     return sendMessage(chatId, txt);
   }
+}
+
+// ------------------------------------------------------------------ helpers
+async function acceptHelper(code: string, from: any, chatId: number | string) {
+  const hash = hashCode(code);
+  const ref = await getJSON<{ groupId: string; inviteId: string }>(`hinv/${hash}`);
+  const g = ref ? await getGroup(ref.groupId) : null;
+  const inv = g?.invites?.find(i => i.id === ref!.inviteId);
+  if (!g || !inv || new Date(inv.expiresAt).getTime() < Date.now()) {
+    return sendMessage(chatId, "❌ Taklif topilmadi yoki muddati o'tgan. Guruh adminidan yangi havola so'rang.");
+  }
+  const uid = String(from.id);
+  if (g.adminId === uid) return sendMessage(chatId, 'Siz bu guruhning adminisiz.');
+  if ((g.helpers || []).some(h => h.userId === uid)) return sendMessage(chatId, 'Siz allaqachon bu guruh yordamchisisiz.');
+  if ((g.helpers || []).length >= 10) return sendMessage(chatId, "Bu guruhda yordamchilar soni to'lgan.");
+
+  g.helpers = [...(g.helpers || []), { userId: uid, name: displayName(from), username: from.username, perms: inv.perms, addedAt: new Date().toISOString() }];
+  g.invites = (g.invites || []).filter(i => i.id !== inv.id);
+  await saveGroup(g);
+  await del(`hinv/${hash}`);
+  await addGroupToAdmin(uid, g.id);
+  await audit(displayName(from), 'YORDAMCHI_QOSHILDI', `${displayName(from)} «${g.title}» guruhiga yordamchi bo'ldi`, g.id);
+  await openPanelButton(chatId, `✅ Siz «<b>${esc(g.title)}</b>» guruhiga yordamchi admin bo'ldingiz. Sizga berilgan huquqlar panelda ko'rinadi.`, '/', '📱 Panelni ochish');
+  await sendMessage(g.adminId, `✅ ${esc(displayName(from))} «${esc(g.title)}» guruhiga yordamchi bo'ldi.`);
 }
 
 // ------------------------------------------------------------------ onboarding
@@ -185,7 +210,8 @@ async function onLink(m: any, codeArg: string) {
 async function onStopCmd(m: any) {
   const g = await getGroup(String(m.chat.id));
   if (!g || !g.runningQuizId) return;
-  if (!(await isChatAdmin(m.chat.id, m.from.id))) return;
+  const helperOk = (g.helpers || []).some(h => h.userId === String(m.from.id) && h.perms.control);
+  if (!helperOk && !(await isChatAdmin(m.chat.id, m.from.id))) return;
   await stopQuiz(g.runningQuizId);
 }
 

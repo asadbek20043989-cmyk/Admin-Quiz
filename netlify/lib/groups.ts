@@ -35,6 +35,7 @@ export function newGroup(p: {
       adFree: false,
     },
     plan: {
+      autoDailyMax: 2,
       aiDailyQuota: p.plan.aiDailyQuota,
       aiDailyUsed: 0,
       aiDailyDate: tashkentDate(),
@@ -51,6 +52,9 @@ export function newGroup(p: {
       signatoryTitle: 'Guruh Admini',
       signatoryName: p.adminName,
     },
+    helpers: [],
+    invites: [],
+    auto: { enabled: false, times: [], questionCount: 5, secondsPerQuestion: 30, difficulty: 'medium', topicHint: '', recentTopics: [] },
     linkedAt: new Date().toISOString(),
     adminId: p.adminId,
     adminName: p.adminName,
@@ -95,6 +99,10 @@ export async function migrateGroup(oldId: string, newId: string) {
   const { getJSON, setJSON, del } = await import('./db.ts');
   const ids = (await getJSON<string[]>(`ug/${g.adminId}`)) || [];
   await setJSON(`ug/${g.adminId}`, ids.map(i => (i === oldId ? newId : i)));
+  for (const h of g.helpers || []) {
+    const hid = (await getJSON<string[]>(`ug/${h.userId}`)) || [];
+    await setJSON(`ug/${h.userId}`, hid.map(i => (i === oldId ? newId : i)));
+  }
   const quizzes = await getJSON<any[]>(`gq/${oldId}`);
   if (quizzes) await setJSON(`gq/${newId}`, quizzes);
   await del(`g/${oldId}`);

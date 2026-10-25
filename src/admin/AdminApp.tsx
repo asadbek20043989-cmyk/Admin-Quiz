@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { BarChart3, Bot, History, Settings, Sparkles } from 'lucide-react';
 import { api } from '../lib/api';
-import type { GroupRecord, MeResponse, QuizSummary } from '../types';
+import type { GroupRecord, HelperPerms, MeResponse, QuizSummary } from '../types';
 import { ErrorBox, Spinner, TelegramGate, useToast } from '../components/ui';
 import { DashboardPage } from '../pages/DashboardPage';
 import { QuizCreatorPage } from '../pages/QuizCreatorPage';
@@ -12,7 +12,7 @@ import { webApp } from '../lib/tg';
 import { SettingsPage } from '../pages/SettingsPage';
 
 type Tab = 'home' | 'new' | 'history' | 'stats' | 'settings';
-const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
+const ALL_TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: 'home', label: 'Bosh sahifa', icon: Bot },
   { id: 'new', label: 'Yangi quiz', icon: Sparkles },
   { id: 'history', label: 'Tarix', icon: History },
@@ -89,6 +89,14 @@ function Panel() {
   if (me.groups.length === 0) return <Onboarding botUsername={me.botUsername} />;
 
   const group = me.groups.find(g => g.id === groupId) || me.groups[0];
+  const acc = me.access[group.id];
+  const role = acc?.role || 'helper';
+  const perms: HelperPerms = acc?.perms || { create: false, control: false, stats: false, moderation: false, settings: false, auto: false };
+  const canSettings = role === 'admin' || perms.settings || perms.moderation || perms.auto;
+  const TABS = ALL_TABS.filter(t =>
+    t.id === 'home' ? true : t.id === 'new' ? perms.create : t.id === 'history' ? perms.create || perms.control : t.id === 'stats' ? perms.stats : canSettings
+  );
+  const activeTab: Tab = TABS.some(t => t.id === tab) ? tab : 'home';
   const updateGroup = (g: GroupRecord) => setMe({ ...me, groups: me.groups.map(x => (x.id === g.id ? g : x)) });
 
   return (
@@ -112,8 +120,8 @@ function Panel() {
       </header>
 
       <main className="flex-1 p-4 pb-28 space-y-4">
-        {tab === 'home' && <DashboardPage group={group} quizzes={quizzes} onNavigate={t => setTab(t as Tab)} onChanged={() => loadQuizzes(group.id)} toast={toast.show} />}
-        {tab === 'new' && (
+        {activeTab === 'home' && <DashboardPage perms={perms} group={group} quizzes={quizzes} onNavigate={t => setTab(t as Tab)} onChanged={() => loadQuizzes(group.id)} toast={toast.show} />}
+        {activeTab === 'new' && (
           <QuizCreatorPage
             group={group}
             onDone={() => {
@@ -124,16 +132,16 @@ function Panel() {
             toast={toast.show}
           />
         )}
-        {tab === 'history' && <QuizHistoryPage quizzes={quizzes} onChanged={() => loadQuizzes(group.id)} toast={toast.show} />}
-        {tab === 'stats' && <StatsPage group={group} />}
-        {tab === 'settings' && <SettingsPage group={group} onSaved={updateGroup} toast={toast.show} />}
+        {activeTab === 'history' && <QuizHistoryPage perms={perms} quizzes={quizzes} onChanged={() => loadQuizzes(group.id)} toast={toast.show} />}
+        {activeTab === 'stats' && <StatsPage group={group} />}
+        {activeTab === 'settings' && <SettingsPage role={role} perms={perms} group={group} onSaved={updateGroup} toast={toast.show} />}
       </main>
 
       <nav className="fixed bottom-0 inset-x-0 z-40 bg-slate-950/95 backdrop-blur border-t border-slate-800" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        <div className="max-w-3xl mx-auto grid grid-cols-5">
+        <div className="max-w-3xl mx-auto grid" style={{ gridTemplateColumns: `repeat(${TABS.length}, minmax(0, 1fr))` }}>
           {TABS.map(t => {
             const Icon = t.icon;
-            const active = tab === t.id;
+            const active = activeTab === t.id;
             return (
               <button key={t.id} onClick={() => setTab(t.id)} className={`py-2.5 flex flex-col items-center gap-0.5 text-[10px] font-semibold cursor-pointer ${active ? 'text-sky-400' : 'text-slate-500'}`}>
                 <Icon className="w-5 h-5" />

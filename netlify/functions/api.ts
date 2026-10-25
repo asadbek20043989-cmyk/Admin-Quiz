@@ -1,13 +1,15 @@
 import { randomInt } from 'node:crypto';
 import type {
-  AdminCodeRecord, AdRecord, BotHealth, CertificateTemplate, GroupRecord, MeResponse, ModerationLog, QuestionRecord, QuizRecord, QuizSummary,
+  AdminCodeRecord, AdRecord, BotHealth, CertificateTemplate, GroupAccess, GroupRecord, HelperPerms, MeResponse, ModerationLog, QuestionRecord, QuizRecord, QuizSummary,
 } from '../../src/types/index.ts';
 import { authenticate, displayName, type AuthedUser } from '../lib/auth.ts';
-import { getIndex, getText, setText, audit, getGroup, getJSON, getQuiz, groupsOfAdmin, listAllGroups, removeSummary, saveGroup, saveQuiz, setJSON, updateIndex, upsertSummary, del } from '../lib/db.ts';
+import { removeGroupFromUser, getIndex, getText, setText, audit, getGroup, getJSON, getQuiz, groupsOfAdmin, listAllGroups, removeSummary, saveGroup, saveQuiz, setJSON, updateIndex, upsertSummary, del } from '../lib/db.ts';
 import { botId, botUsername, sendMessage, tg } from '../lib/tg.ts';
 import { esc, uid, WEBHOOK_SECRET, BOT_TOKEN, GEMINI_KEY, SUPER_ADMIN_IDS } from '../lib/config.ts';
 import { refreshMemberCount, rollQuotas } from '../lib/groups.ts';
-import { generateQuiz } from '../lib/ai.ts';
+import { createGenJob, deleteGenJob, getGenJob } from '../lib/gen.ts';
+import { callBackground } from '../lib/bg.ts';
+import { syncAutoIndex } from '../lib/autoQuiz.ts';
 import { getStats, saveStats, snapshotMembers, toOverview } from '../lib/stats.ts';
 import { getAds, saveAds, siteUrl, sendAdToGroups } from '../lib/ads.ts';
 import { hashCode, setupBot } from '../lib/bot.ts';
@@ -35,16 +37,51 @@ class HttpError extends Error {
   }
 }
 
-async function ownGroup(me: AuthedUser, gid: string): Promise<GroupRecord> {
+const ALL_PERMS: HelperPerms = { create: true, control: true, stats: true, moderation: true, settings: true, auto: true };
+type Need = keyof HelperPerms | 'admin';
+interface Acc { group: GroupRecord; role: 'admin' | 'helper'; perms: HelperPerms }
+
+// Resolves the caller's role in a group (group admin or invited helper) and enforces permissions.
+// `need` is a list of acceptable permissions (any of them is enough); omit it for "any member".
+async function access(me: AuthedUser, gid: string, need?: Need | Need[]): Promise<Acc> {
   const g = await getGroup(gid);
-  if (!g || g.adminId !== String(me.user.id)) throw new HttpError(403, "Bu guruhga ruxsatingiz yo'q");
-  return g;
+  const me_id = String(me.user.id);
+  if (!g) throw new HttpError(403, "Bu guruhga ruxsatingiz yo'q");
+  let role: 'admin' | 'helper';
+  let perms: HelperPerms;
+  if (g.adminId === me_id) {
+    role = 'admin';
+    perms = ALL_PERMS;
+  } else {
+    const h = (g.helpers || []).find(x => x.userId === me_id);
+    if (!h) throw new HttpError(403, "Bu guruhga ruxsatingiz yo'q");
+    role = 'helper';
+    perms = h.perms;
+  }
+  if (need) {
+    const list = Array.isArray(need) ? need : [need];
+    if (!list.some(n => (n === 'admin' ? role === 'admin' : perms[n]))) throw new HttpError(403, "Bu amal uchun sizda ruxsat yo'q");
+  }
+  return { group: g, role, perms };
 }
-async function ownQuiz(me: AuthedUser, qid: string): Promise<{ quiz: QuizRecord; group: GroupRecord }> {
-  const quiz = await getQuiz(qid);
-  if (!quiz) throw new HttpError(404, 'Quiz topilmadi');
-  return { quiz, group: await ownGroup(me, quiz.groupId) };
+
+// What a client may see: never invite hashes; helpers do not see the helper list.
+function clientGroup(g: GroupRecord, role: 'admin' | 'helper'): GroupRecord {
+  const { invites: _i, adLog: _a, ...rest } = g;
+  const out = { ...rest } as GroupRecord;
+  if (role === 'helper') out.helpers = [];
+  return out;
 }
+
+const cleanPerms = (b: any): HelperPerms => ({
+  create: !!b?.create,
+  control: !!b?.control,
+  stats: !!b?.stats,
+  moderation: !!b?.moderation,
+  settings: !!b?.settings,
+  auto: !!b?.auto,
+});
+
 const activeOnly = (g: GroupRecord) => {
   if (g.status !== 'active') throw new HttpError(403, "Guruh hozir faol emas (to'xtatilgan yoki bot olib tashlangan)");
 };
@@ -71,28 +108,53 @@ export default async (req: Request) => {
       return await ownerRoutes(parts.slice(1), method, req, me, url);
     }
 
-    // ---- Admin area
-    const body = method === 'GET' || method === 'DELETE' ? {} : await req.json().catch(() => ({}));
+    // ---- Admin / helper area
+    const body: any = method === 'GET' || method === 'DELETE' ? {} : await req.json().catch(() => ({}));
+    const origin = new URL(req.url).origin;
 
     if (parts[0] === 'me' && method === 'GET') {
-      const groups = await groupsOfAdmin(String(me.user.id));
-      for (const g of groups) await maintainGroup(g);
-      const out: MeResponse = { user: me.user, isOwner: me.isOwner, groups: await groupsOfAdmin(String(me.user.id)), botUsername: await botUsername() };
+      const uidStr = String(me.user.id);
+      const ids = (await getJSON<string[]>(`ug/${uidStr}`)) || [];
+      const groups: GroupRecord[] = [];
+      const acc: Record<string, GroupAccess> = {};
+      for (const id of ids) {
+        const g = await getGroup(id);
+        if (!g) continue;
+        if (g.adminId === uidStr) {
+          await maintainGroup(g);
+          acc[g.id] = { role: 'admin', perms: ALL_PERMS };
+          groups.push(clientGroup(g, 'admin'));
+        } else {
+          const h = (g.helpers || []).find(x => x.userId === uidStr);
+          if (!h) continue; // removed helper
+          acc[g.id] = { role: 'helper', perms: h.perms };
+          groups.push(clientGroup(g, 'helper'));
+        }
+      }
+      const out: MeResponse = { user: me.user, isOwner: me.isOwner, groups, access: acc, botUsername: await botUsername() };
       return json(out);
     }
 
     if (parts[0] === 'certificate-templates') return json(TEMPLATES);
 
     if (parts[0] === 'groups' && parts[1]) {
-      const g = await ownGroup(me, parts[1]);
+      const gid = parts[1];
       const sub = parts[2];
 
-      if (!sub && method === 'GET') return json(g);
-
-      if (sub === 'health' && method === 'GET') return json(await health(g));
+      if (!sub && method === 'GET') {
+        const a = await access(me, gid);
+        return json(clientGroup(a.group, a.role));
+      }
+      if (sub === 'health' && method === 'GET') return json(await health((await access(me, gid)).group));
 
       if (sub === 'settings' && method === 'PATCH') {
-        const b: any = body;
+        const a = await access(me, gid, ['settings', 'moderation']);
+        const g = a.group;
+        const b = body;
+        const settingKeys = ['autoApproveJoin', 'welcomeEnabled', 'explainEnabled', 'welcomeMessage', 'rules'];
+        const modKeys = ['antiSpamEnabled', 'filterLinks', 'filterForwards', 'bannedWords'];
+        if (settingKeys.some(k => b[k] !== undefined) && !a.perms.settings) throw new HttpError(403, "Guruh sozlamalarini o'zgartirishga ruxsatingiz yo'q");
+        if (modKeys.some(k => b[k] !== undefined) && !a.perms.moderation) throw new HttpError(403, "Moderatsiyani o'zgartirishga ruxsatingiz yo'q");
         const s = g.settings;
         for (const k of ['autoApproveJoin', 'welcomeEnabled', 'antiSpamEnabled', 'filterLinks', 'filterForwards', 'explainEnabled'] as const) {
           if (typeof b[k] === 'boolean') s[k] = b[k];
@@ -102,68 +164,187 @@ export default async (req: Request) => {
         if (Array.isArray(b.bannedWords)) s.bannedWords = [...new Set(b.bannedWords.map((w: unknown) => str(w, 40).toLowerCase()).filter(Boolean))].slice(0, 100) as string[];
         await saveGroup(g);
         await audit(displayName(me.user), 'SOZLAMALAR_YANGILANDI', `«${g.title}» sozlamalari yangilandi`, g.id);
-        return json({ success: true, group: g });
+        return json({ success: true, group: clientGroup(g, a.role) });
       }
 
       if (sub === 'certificate-settings' && method === 'PATCH') {
-        const b: any = body;
+        const a = await access(me, gid, 'settings');
+        const g = a.group;
+        const b = body;
         const c = g.certificateSettings;
         if (TEMPLATES.some(t => t.id === b.templateId)) c.templateId = b.templateId;
         if (b.winnersCount !== undefined) c.winnersCount = num(b.winnersCount, 1, 10, c.winnersCount);
-        if (b.minScore !== undefined) c.minScore = num(b.minScore, 0, 30, c.minScore);
         if (b.signatoryTitle !== undefined) c.signatoryTitle = str(b.signatoryTitle, 60) || c.signatoryTitle;
         if (b.signatoryName !== undefined) c.signatoryName = str(b.signatoryName, 60) || c.signatoryName;
         await saveGroup(g);
-        return json({ success: true, group: g });
+        return json({ success: true, group: clientGroup(g, a.role) });
       }
 
       if (sub === 'stats' && method === 'GET') {
+        const g = (await access(me, gid, 'stats')).group;
         await refreshMemberCount(g);
         await saveGroup(g);
         return json(toOverview(g, await getStats(g.id)));
       }
 
       if (sub === 'moderation' && method === 'GET') {
+        const g = (await access(me, gid, 'moderation')).group;
         return json({ logs: (await getJSON<ModerationLog[]>(`mod/${g.id}`)) || [] });
+      }
+
+      // ---- automatic daily quizzes
+      if (sub === 'auto' && method === 'PATCH') {
+        const a = await access(me, gid, 'auto');
+        const g = a.group;
+        const b = body;
+        const times: string[] = Array.isArray(b.times)
+          ? [...new Set<string>(b.times.map((t: unknown) => String(t)).filter((t: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t)))].sort()
+          : [];
+        if (times.length > g.plan.autoDailyMax) return err(`Kuniga ko'pi bilan ${g.plan.autoDailyMax} ta avtomatik quiz yuborish mumkin (Super Admin belgilagan limit)`);
+        const mins = times.map(t => Number(t.slice(0, 2)) * 60 + Number(t.slice(3)));
+        for (let i = 0; i < mins.length; i++) {
+          const next = i + 1 < mins.length ? mins[i + 1] : mins[0] + 1440;
+          if (mins.length > 1 && next - mins[i] < 20) return err("Avtomatik quizlar orasida kamida 20 daqiqa bo'lishi kerak");
+        }
+        const enabled = !!b.enabled;
+        if (enabled && times.length === 0) return err('Kamida bitta vaqt kiriting');
+        g.auto = {
+          ...(g.auto!),
+          enabled,
+          times,
+          questionCount: num(b.questionCount, 3, 20, 5),
+          secondsPerQuestion: num(b.secondsPerQuestion, 5, 600, 30),
+          difficulty: ['easy', 'medium', 'hard'].includes(b.difficulty) ? b.difficulty : 'medium',
+          topicHint: str(b.topicHint, 80),
+        };
+        await saveGroup(g);
+        await syncAutoIndex(g);
+        await audit(displayName(me.user), 'AVTO_QUIZ_SOZLANDI', `«${g.title}»: ${enabled ? times.join(', ') : "o'chirildi"}`, g.id);
+        return json({ success: true, group: clientGroup(g, a.role) });
+      }
+
+      // ---- helpers (group admin only)
+      if (sub === 'helpers') {
+        const a = await access(me, gid, 'admin');
+        const g = a.group;
+        const now = Date.now();
+        const live = (g.invites || []).filter(i => new Date(i.expiresAt).getTime() > now);
+        if (live.length !== (g.invites || []).length) {
+          g.invites = live;
+          await saveGroup(g);
+        }
+        const publicInvites = () => (g.invites || []).map(({ hash: _h, ...i }) => i);
+
+        if (!parts[3] && method === 'GET') return json({ helpers: g.helpers || [], invites: publicInvites(), limit: 10 });
+
+        if (parts[3] === 'invite' && method === 'POST') {
+          if ((g.helpers || []).length + (g.invites || []).length >= 10) return err("Yordamchi adminlar soni 10 tadan oshmasligi kerak (kutilayotgan takliflar ham hisobga olinadi)");
+          const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+          const code = 'HP' + Array.from({ length: 8 }, () => alphabet[randomInt(alphabet.length)]).join('');
+          const hash = hashCode(code);
+          const invite = { id: uid('inv'), label: str(body.label, 40) || 'Yordamchi', perms: cleanPerms(body.perms), expiresAt: new Date(now + 24 * 3600 * 1000).toISOString(), hash };
+          g.invites = [...(g.invites || []), invite];
+          await saveGroup(g);
+          await setJSON(`hinv/${hash}`, { groupId: g.id, inviteId: invite.id });
+          const { hash: _h, ...pub } = invite;
+          return json({ success: true, code, link: `https://t.me/${await botUsername()}?start=helper_${code}`, invite: pub });
+        }
+
+        if (parts[3] === 'invites' && parts[4] && method === 'DELETE') {
+          const inv = (g.invites || []).find(i => i.id === parts[4]);
+          g.invites = (g.invites || []).filter(i => i.id !== parts[4]);
+          await saveGroup(g);
+          if (inv?.hash) await del(`hinv/${inv.hash}`);
+          return json({ success: true });
+        }
+
+        if (parts[3] && parts[3] !== 'invite' && parts[3] !== 'invites') {
+          const h = (g.helpers || []).find(x => x.userId === parts[3]);
+          if (!h) return err('Yordamchi topilmadi', 404);
+          if (method === 'PATCH') {
+            h.perms = cleanPerms(body.perms);
+            await saveGroup(g);
+            return json({ success: true, helper: h });
+          }
+          if (method === 'DELETE') {
+            g.helpers = (g.helpers || []).filter(x => x.userId !== h.userId);
+            await saveGroup(g);
+            await removeGroupFromUser(h.userId, g.id);
+            await audit(displayName(me.user), 'YORDAMCHI_OLIB_TASHLANDI', `${h.name} «${g.title}» yordamchilaridan olib tashlandi`, g.id);
+            return json({ success: true });
+          }
+        }
       }
 
       if (sub === 'quizzes') {
         if (parts[3] === 'generate' && method === 'POST') {
+          const g = (await access(me, gid, 'create')).group;
           activeOnly(g);
-          const b: any = body;
+          const b = body;
           if (rollQuotas(g)) await saveGroup(g);
           if (g.plan.aiDailyUsed >= g.plan.aiDailyQuota) return err("Guruhning kunlik AI kvotasi tugadi. Super Adminga murojaat qiling yoki ertaga urinib ko'ring.", 429);
           const topic = str(b.topic, 120);
           if (!topic) return err('Mavzu kiritilishi shart');
-          try {
-            const r = await generateQuiz({
-              topic,
-              difficulty: ['easy', 'medium', 'hard'].includes(b.difficulty) ? b.difficulty : 'medium',
-              questionCount: num(b.questionCount, 1, 30, 5),
-              optionsCount: num(b.optionsCount, 3, 4, 4),
-            });
-            g.plan.aiDailyUsed += 1;
+          const job = await createGenJob(g.id, String(me.user.id), {
+            topic,
+            difficulty: ['easy', 'medium', 'hard'].includes(b.difficulty) ? b.difficulty : 'medium',
+            count: num(b.questionCount, 1, 30, 5),
+            optionsCount: num(b.optionsCount, 3, 4, 4),
+          });
+          g.plan.aiDailyUsed += 1;
+          await saveGroup(g);
+          if (!(await callBackground('ai-generate-background', { jobId: job.id }, origin))) {
+            g.plan.aiDailyUsed = Math.max(0, g.plan.aiDailyUsed - 1);
             await saveGroup(g);
-            return json({ success: true, questions: r.questions, tokensUsed: r.tokens });
-          } catch (e: any) {
-            return err(e?.message || "AI bilan bog'lanib bo'lmadi", 502);
+            await deleteGenJob(job.id);
+            return err("AI jarayonini ishga tushirib bo'lmadi. Bir ozdan keyin qayta urinib ko'ring.", 502);
           }
+          return json({ jobId: job.id });
         }
-        if (!parts[3] && method === 'GET') return json((await getJSON<QuizSummary[]>(`gq/${g.id}`)) || []);
-        if (!parts[3] && method === 'POST') return await createQuiz(g, me, body as any);
+        if (parts[3] === 'generate' && parts[4] && method === 'GET') {
+          await access(me, gid, 'create');
+          const job = await getGenJob(parts[4]);
+          if (!job || job.groupId !== gid || job.userId !== String(me.user.id)) return err('Topilmadi', 404);
+          if (job.status === 'pending') {
+            if (Date.now() - new Date(job.createdAt).getTime() > 6 * 60 * 1000) {
+              const g = await getGroup(gid);
+              if (g) {
+                g.plan.aiDailyUsed = Math.max(0, g.plan.aiDailyUsed - 1);
+                await saveGroup(g);
+              }
+              await deleteGenJob(job.id);
+              return json({ status: 'error', error: "AI javob bermadi. Qayta urinib ko'ring." });
+            }
+            return json({ status: 'pending' });
+          }
+          await deleteGenJob(job.id);
+          return job.status === 'done' ? json({ status: 'done', questions: job.questions, warning: job.warning }) : json({ status: 'error', error: job.error });
+        }
+        if (!parts[3] && method === 'GET') {
+          const g = (await access(me, gid, ['create', 'control'])).group;
+          return json((await getJSON<QuizSummary[]>(`gq/${g.id}`)) || []);
+        }
+        if (!parts[3] && method === 'POST') {
+          const g = (await access(me, gid, 'create')).group;
+          return await createQuiz(g, me, body);
+        }
       }
     }
 
     if (parts[0] === 'quizzes' && parts[1]) {
-      const { quiz, group } = await ownQuiz(me, parts[1]);
-      if (!parts[2] && method === 'GET') return json(quiz);
-      if (parts[2] === 'send' && method === 'POST') {
+      const quiz = await getQuiz(parts[1]);
+      if (!quiz) throw new HttpError(404, 'Quiz topilmadi');
+      const sub = parts[2];
+      const need: Need[] = sub === 'send' || sub === 'restart' ? ['create'] : sub === 'stop' || (!sub && method === 'DELETE') ? ['control'] : ['create', 'control'];
+      const group = (await access(me, quiz.groupId, need)).group;
+      if (!sub && method === 'GET') return json(quiz);
+      if (sub === 'send' && method === 'POST') {
         const r = await startQuiz(quiz.id);
-        if (!r.ok) return err(r.error || 'Yuborib bo\'lmadi', 409);
+        if (!r.ok) return err(r.error || "Yuborib bo'lmadi", 409);
         await audit(displayName(me.user), 'QUIZ_YUBORILDI', `«${quiz.topic}» guruhga yuborildi`, group.id);
         return json({ success: true });
       }
-      if (parts[2] === 'restart' && method === 'POST') {
+      if (sub === 'restart' && method === 'POST') {
         activeOnly(group);
         if (quiz.status === 'running') return err('Quiz hozir davom etmoqda');
         // A replay is a fresh copy (new id, no results), so the old results stay in the history.
@@ -193,11 +374,11 @@ export default async (req: Request) => {
         await audit(displayName(me.user), 'QUIZ_QAYTA_BOSHLANDI', `«${quiz.topic}» qayta o'tkazildi`, group.id);
         return json({ success: true, id: copy.id });
       }
-      if (parts[2] === 'stop' && method === 'POST') {
+      if (sub === 'stop' && method === 'POST') {
         await stopQuiz(quiz.id);
         return json({ success: true });
       }
-      if (!parts[2] && method === 'DELETE') {
+      if (!sub && method === 'DELETE') {
         if (quiz.status === 'running') return err("Davom etayotgan quizni o'chirib bo'lmaydi. Avval to'xtating.");
         await del(`q/${quiz.id}`);
         await removeSummary(group.id, quiz.id);
@@ -271,7 +452,7 @@ function cleanQuestions(raw: any): QuestionRecord[] | string {
     if (options.length < 2 || options.length > 4) return `${i + 1}-savolda 2 dan 4 gacha variant bo'lishi kerak`;
     if (new Set(options.map((o: string) => o.toLowerCase())).size !== options.length) return `${i + 1}-savolda bir xil variantlar bor`;
     if (!Number.isInteger(ci) || ci < 0 || ci >= options.length) return `${i + 1}-savolda to'g'ri javob tanlanmagan`;
-    out.push({ id: `q-${Date.now()}-${i + 1}`, position: i + 1, text, options, correctOptionIndex: ci, explanation: str(q?.explanation, 200), verified: true });
+    out.push({ id: `q-${Date.now()}-${i + 1}`, position: i + 1, text, options, correctOptionIndex: ci, explanation: '', verified: true });
   }
   return out;
 }
@@ -357,7 +538,7 @@ async function ownerRoutes(p: string[], method: string, req: Request, me: Authed
     if (!p[1] && method === 'GET') {
       const groups = await listAllGroups();
       groups.forEach(rollQuotas);
-      return json(groups);
+      return json(groups.map(g => clientGroup(g, 'admin')));
     }
     const g = await getGroup(p[1]);
     if (!g) return err('Guruh topilmadi', 404);
@@ -367,10 +548,16 @@ async function ownerRoutes(p: string[], method: string, req: Request, me: Authed
       g.plan.adMinPerWeek = num(body.adMinPerWeek, 0, 14, g.plan.adMinPerWeek);
       g.plan.adMaxPerWeek = Math.max(g.plan.adMinPerWeek, num(body.adMaxPerWeek, 0, 14, g.plan.adMaxPerWeek));
       if (typeof body.adFree === 'boolean') g.settings.adFree = body.adFree;
+      g.plan.autoDailyMax = num(body.autoDailyMax, 0, 10, g.plan.autoDailyMax ?? 2);
+      if (g.auto) {
+        if (g.auto.times.length > g.plan.autoDailyMax) g.auto.times = g.auto.times.slice(0, g.plan.autoDailyMax);
+        if (g.plan.autoDailyMax === 0 || g.auto.times.length === 0) g.auto.enabled = false;
+      }
       g.settings.adFrequencyPerWeek = Math.min(Math.max(g.settings.adFrequencyPerWeek, g.plan.adMinPerWeek), g.plan.adMaxPerWeek);
       await saveGroup(g);
+      await syncAutoIndex(g);
       await audit(actor, 'LIMITLAR_YANGILANDI', `«${g.title}» limitlari o'zgartirildi`, g.id);
-      return json({ success: true, group: g });
+      return json({ success: true, group: clientGroup(g, 'admin') });
     }
     if (p[2] === 'toggle' && method === 'POST') {
       if (g.status === 'active') {
@@ -382,6 +569,7 @@ async function ownerRoutes(p: string[], method: string, req: Request, me: Authed
         g.status = 'suspended';
       } else g.status = 'active';
       await saveGroup(g);
+      await syncAutoIndex(g);
       await audit(actor, g.status === 'active' ? 'GURUH_FAOLLASHTIRILDI' : 'GURUH_TOXTATILDI', `«${g.title}»`, g.id);
       return json({ success: true, status: g.status });
     }

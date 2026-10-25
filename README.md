@@ -40,16 +40,26 @@ Admin oynasida Super Admin tugmasi **yo'q**, Admin bundle'ida Super Admin kodi h
 2. Netlify env: `MINIAPP_SHORTNAME=panel` → qayta deploy.
 Shundan keyin g'oliblar tugmani bosganda sertifikat Telegram ichida to'g'ridan-to'g'ri ochiladi.
 
+## Yordamchi adminlar (har bir guruhga 10 tagacha)
+Admin panel → Sozlamalar → **Yordamchilar**: huquqlarni belgilab taklif havolasi yaratadi, havolani yordamchiga yuboradi. Yordamchi botda «Start» bosganda qo'shiladi. Huquqlar: quiz yaratish/yuborish, quizni to'xtatish/o'chirish, statistika, moderatsiya, guruh va sertifikat sozlamalari, avto-quizlar. Yordamchilarni boshqarish faqat guruh adminida. Server har so'rovda huquqni tekshiradi.
+
+## Avtomatik quizlar
+Admin panel → Sozlamalar → **Avto-quiz**: kuniga qaysi vaqtlarda (Toshkent vaqti), nechta savol, qancha soniya. Bot guruh nomiga qarab mos fan va mavzuni o'zi tanlaydi (admin xohlasa fanni o'zi yozadi). Kuniga nechta quiz yuborilishi mumkinligini Super Admin belgilaydi (Guruhlar → Limitlar → «Avtomatik quiz», 0–10). Avto-quiz 5 daqiqagacha kechikishi mumkin.
+
+## Savollar sifati va xavfsizlik
+Har bir savol ikki bosqichda: avval AI tuzadi, keyin alohida so'rovda javobni mustaqil yechib tekshiradi. Savol faqat javoblar mos kelsa, AI to'liq ishonch bildirsa, bitta to'g'ri javob bo'lsa va savol zararsiz bo'lsa qabul qilinadi. Tekshiruvdan o'tmagan savol hech qachon yuborilmaydi. Izoh/asos ko'rsatilmaydi. AI 429 (kvota) bersa, boshqa modelga o'tadi va kutib qayta urinadi. Shunga qaramay, hech qanday AI 100% xatosiz bo'la olmaydi, shuning uchun panelda savollarni yuborishdan oldin ko'zdan kechirish imkoni saqlangan.
+
 ## Qanday ishlaydi
 - Savollar guruhga ketma-ket yuboriladi. Admin har bir savol vaqtini (5–600 soniya) o'zi belgilaydi. Vaqt tugashi bilan keyingi savol **avtomatik** yuboriladi: quiz davomida kichik fon funksiyasi (`quiz-runner-background`) kutib turadi va aynan vaqtida uyg'onadi.
 - Natijalar: +1 ball to'g'ri javobga, tezlik uchun +0.5 gacha bonus. Tenglikda: ko'p to'g'ri javob, keyin kam vaqt.
 - Top-N o'rin olganlar (kamida 1 ta to'g'ri javob bilan) guruhda ism bilan tegiladi va har biriga sertifikat tugmasi beriladi. Sertifikat brauzerda chiziladi (fan nomi yozilmaydi).
 - Reklama: Super Admin paneli → Reklama → «Guruhlarga yuborish». Istalgan guruh(lar)ni tanlab, hozir yoki belgilangan vaqtda yuboradi. Guruhda faqat reklama matni (rasm/tugma bilan yoki usiz) ko'rinadi, boshqa yozuv yo'q.
-- Rejalashtirilgan quizlarni boshlash uchun har 5 daqiqada yengil `cron` ishlaydi (bitta kichik yozuvni o'qiydi, ish bo'lmasa darhol tugaydi).
+- Rejalashtirilgan va avtomatik quizlar, hamda Super Admin reklamalarini vaqtida ishga tushirish uchun har 5 daqiqada yengil `cron` ishlaydi (bitta kichik yozuvni o'qiydi, ish bo'lmasa darhol tugaydi).
+- AI generatsiyasi va avto-quiz fon funksiyalarida (`ai-generate-background`, `auto-quiz-background`) ishlaydi, shuning uchun 10 soniyalik cheklov yo'q.
 - Barcha statistika **noldan** boshlanadi. Ma'lumotlar Netlify Blobs'da saqlanadi.
 
 ## Netlify kreditini tejash
-- Ish faqat quiz paytida sarflanadi: har ishtirokchi javobi = 1 ta qisqa chaqiruv, va quiz davomida bitta fon funksiyasi kutib turadi (masalan 10 savol × 30 s ≈ 5 daqiqa).
+- Ish faqat quiz va AI generatsiya paytida sarflanadi (AI generatsiya paytida panel natijani har 2,5–5 soniyada so'raydi): har ishtirokchi javobi = 1 ta qisqa chaqiruv, va quiz davomida bitta fon funksiyasi kutib turadi (masalan 10 savol × 30 s ≈ 5 daqiqa).
 - Quiz bo'lmaganda faqat 5 daqiqalik cron ishlaydi (oyiga ~8 600 juda qisqa chaqiruv). Rejalashtirilgan quizlardan foydalanmasangiz, `netlify/functions/cron.ts` dagi `schedule`ni `0 * * * *` (soatiga bir) qilib, deyarli nolga tushirishingiz mumkin.
 - Anti-spam yoqilsa, guruhdagi har bir xabar tekshiriladi, shuning uchun u **standart holatda o'chiq**.
 

@@ -100,7 +100,6 @@ async function sendQuestion(quiz: QuizRecord, g: GroupRecord, idx: number): Prom
     type: 'quiz',
     is_anonymous: false,
     correct_option_id: q.correctOptionIndex,
-    explanation: q.explanation ? q.explanation.slice(0, 200) : undefined,
     open_period: period,
   });
   if (!r.ok || !r.result) return { ok: false, error: r.description || 'noma\'lum xato' };
@@ -327,7 +326,6 @@ export async function reviewText(quizId: string, userId: string): Promise<string
     out += `\n<b>${i + 1}. ${esc(q.text)}</b>\n`;
     out += chosen === undefined ? `⏭ Javob berilmagan\n` : `❌ Sizning javobingiz: ${esc(q.options[chosen] ?? '?')}\n`;
     out += `✅ To'g'ri javob: ${esc(q.options[q.correctOptionIndex])}\n`;
-    if (q.explanation) out += `💡 ${esc(q.explanation)}\n`;
   });
   if (mistakes === 0) return `🎉 Zo'r! «${esc(quiz.topic)}» quizida birorta ham xato qilmadingiz.`;
   return out.slice(0, 3900);
@@ -375,6 +373,12 @@ export async function runDue(): Promise<void> {
         }
       }
     }
+  }
+  // Automatic daily quizzes that are due
+  const dueAuto = (idx.auto || []).filter(a => a.at <= now);
+  if (dueAuto.length) {
+    const { dispatchAuto } = await import('./autoQuiz.ts');
+    await dispatchAuto(dueAuto);
   }
   // Owner-scheduled ads that are due
   const dueAds = (idx.ads || []).filter(a => a.at <= now);

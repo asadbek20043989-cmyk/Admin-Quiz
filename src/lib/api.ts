@@ -1,6 +1,6 @@
 import { initData } from './tg';
 import type {
-  AdRecord, AdminCodeRecord, AuditLogRecord, BotHealth, CertificateTemplate, GroupRecord, MeResponse, ModerationLog, PublicCertificate,
+  HelperInviteRecord, HelperPerms, HelperRecord, AdRecord, AdminCodeRecord, AuditLogRecord, BotHealth, CertificateTemplate, GroupRecord, MeResponse, ModerationLog, PublicCertificate,
   QuestionRecord, QuizRecord, QuizSummary, StatsOverview,
 } from '../types';
 
@@ -59,8 +59,29 @@ export const api = {
   updateCert: (gid: string, s: unknown) => request<{ group: GroupRecord }>(`/groups/${encodeURIComponent(gid)}/certificate-settings`, 'PATCH', s),
   stats: (gid: string) => request<StatsOverview>(`/groups/${encodeURIComponent(gid)}/stats`),
   moderation: (gid: string) => request<{ logs: ModerationLog[] }>(`/groups/${encodeURIComponent(gid)}/moderation`),
-  generate: (gid: string, p: { topic: string; difficulty: string; questionCount: number; optionsCount: number }) =>
-    request<{ questions: QuestionRecord[] }>(`/groups/${encodeURIComponent(gid)}/quizzes/generate`, 'POST', p),
+  // AI generation runs as a background job (it also verifies every question); we poll for the result.
+  generate: async (gid: string, p: { topic: string; difficulty: string; questionCount: number; optionsCount: number }) => {
+    const { jobId } = await request<{ jobId: string }>(`/groups/${encodeURIComponent(gid)}/quizzes/generate`, 'POST', p);
+    const started = Date.now();
+    let delay = 2500;
+    while (Date.now() - started < 340000) {
+      await new Promise(r => setTimeout(r, delay));
+      delay = Math.min(delay + 500, 5000);
+      const r = await request<{ status: 'pending' | 'done' | 'error'; questions?: QuestionRecord[]; warning?: string; error?: string }>(
+        `/groups/${encodeURIComponent(gid)}/quizzes/generate/${encodeURIComponent(jobId)}`
+      );
+      if (r.status === 'done') return { questions: r.questions || [], warning: r.warning };
+      if (r.status === 'error') throw new ApiError(r.error || 'AI xatosi', 502);
+    }
+    throw new ApiError("AI javob bermadi. Qayta urinib ko'ring.", 504);
+  },
+  saveAuto: (gid: string, a: unknown) => request<{ group: GroupRecord }>(`/groups/${encodeURIComponent(gid)}/auto`, 'PATCH', a),
+  helpers: (gid: string) => request<{ helpers: HelperRecord[]; invites: HelperInviteRecord[]; limit: number }>(`/groups/${encodeURIComponent(gid)}/helpers`),
+  createInvite: (gid: string, d: { label: string; perms: HelperPerms }) =>
+    request<{ code: string; link: string; invite: HelperInviteRecord }>(`/groups/${encodeURIComponent(gid)}/helpers/invite`, 'POST', d),
+  deleteInvite: (gid: string, id: string) => request(`/groups/${encodeURIComponent(gid)}/helpers/invites/${encodeURIComponent(id)}`, 'DELETE'),
+  setHelperPerms: (gid: string, userId: string, perms: HelperPerms) => request(`/groups/${encodeURIComponent(gid)}/helpers/${encodeURIComponent(userId)}`, 'PATCH', { perms }),
+  removeHelper: (gid: string, userId: string) => request(`/groups/${encodeURIComponent(gid)}/helpers/${encodeURIComponent(userId)}`, 'DELETE'),
   quizzes: (gid: string) => request<QuizSummary[]>(`/groups/${encodeURIComponent(gid)}/quizzes`),
   createQuiz: (gid: string, d: QuizDraftInput) => request<{ quiz: QuizRecord }>(`/groups/${encodeURIComponent(gid)}/quizzes`, 'POST', d),
   quiz: (id: string) => request<QuizRecord>(`/quizzes/${encodeURIComponent(id)}`),

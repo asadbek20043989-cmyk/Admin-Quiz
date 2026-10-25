@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { ChevronDown, RotateCcw, Send, Square, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { confirmAction } from '../lib/tg';
-import type { QuizRecord, QuizSummary } from '../types';
+import type { HelperPerms, QuizRecord, QuizSummary } from '../types';
 import { Badge, Btn, Card, Empty, ErrorBox, Spinner, fmtDate } from '../components/ui';
 
 const STATUS: Record<QuizSummary['status'], { label: string; tone: 'slate' | 'sky' | 'emerald' | 'amber' | 'rose' }> = {
@@ -14,12 +14,13 @@ const STATUS: Record<QuizSummary['status'], { label: string; tone: 'slate' | 'sk
 };
 
 interface Props {
+  perms: HelperPerms;
   quizzes: QuizSummary[];
   onChanged: () => void;
   toast: (m: string, ok?: boolean) => void;
 }
 
-export const QuizHistoryPage: React.FC<Props> = ({ quizzes, onChanged, toast }) => {
+export const QuizHistoryPage: React.FC<Props> = ({ perms, quizzes, onChanged, toast }) => {
   const [openId, setOpenId] = useState<string | null>(null);
   const [detail, setDetail] = useState<QuizRecord | null>(null);
   const [loading, setLoading] = useState(false);
@@ -113,22 +114,22 @@ export const QuizHistoryPage: React.FC<Props> = ({ quizzes, onChanged, toast }) 
                       </ol>
                     )}
                     <div className="flex flex-wrap gap-2">
-                      {(detail.status === 'draft' || detail.status === 'scheduled') && (
+                      {perms.create && (detail.status === 'draft' || detail.status === 'scheduled') && (
                         <Btn tone="primary" busy={busy} onClick={async () => (await confirmAction('Hozir guruhga yuborilsinmi?')) && act(() => api.sendQuiz(detail.id), 'Quiz guruhga yuborildi 🚀')}>
                           <Send className="w-3.5 h-3.5" /> Hozir yuborish
                         </Btn>
                       )}
-                      {(detail.status === 'finished' || detail.status === 'cancelled') && (
+                      {perms.create && (detail.status === 'finished' || detail.status === 'cancelled') && (
                         <Btn tone="primary" busy={busy} onClick={async () => (await confirmAction('Quiz xuddi shu savollar bilan guruhga qayta yuborilsinmi? Eski natijalar tarixda saqlanadi.')) && act(() => api.restartQuiz(detail.id), 'Quiz qayta boshlandi 🚀')}>
                           <RotateCcw className="w-3.5 h-3.5" /> Qayta boshlash
                         </Btn>
                       )}
-                      {(detail.status === 'running' || detail.status === 'scheduled') && (
+                      {perms.control && (detail.status === 'running' || detail.status === 'scheduled') && (
                         <Btn tone="danger" busy={busy} onClick={async () => (await confirmAction(detail.status === 'running' ? "Quizni to'xtatib, natijalarni e'lon qilaymi?" : 'Rejalashtirilgan quizni bekor qilaymi?')) && act(() => api.stopQuiz(detail.id), detail.status === 'running' ? "Quiz to'xtatildi" : 'Bekor qilindi')}>
                           <Square className="w-3.5 h-3.5" /> {detail.status === 'running' ? "To'xtatish" : 'Bekor qilish'}
                         </Btn>
                       )}
-                      {detail.status !== 'running' && (
+                      {perms.control && detail.status !== 'running' && (
                         <Btn tone="danger" busy={busy} onClick={async () => (await confirmAction("Quiz o'chirilsinmi?")) && act(() => api.deleteQuiz(detail.id), "O'chirildi")}>
                           <Trash2 className="w-3.5 h-3.5" /> O'chirish
                         </Btn>

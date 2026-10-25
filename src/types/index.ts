@@ -22,7 +22,43 @@ export interface GroupSettings {
   adFree: boolean;
 }
 
+export interface HelperPerms {
+  create: boolean; // generate, create, send and replay quizzes
+  control: boolean; // stop and delete quizzes
+  stats: boolean;
+  moderation: boolean;
+  settings: boolean; // welcome message, rules, certificate settings
+  auto: boolean; // automatic daily quizzes
+}
+
+export interface HelperRecord {
+  userId: string;
+  name: string;
+  username?: string;
+  perms: HelperPerms;
+  addedAt: string;
+}
+
+export interface HelperInviteRecord {
+  id: string;
+  label: string;
+  perms: HelperPerms;
+  expiresAt: string;
+  hash?: string; // never sent to clients
+}
+
+export interface AutoQuizSettings {
+  enabled: boolean;
+  times: string[]; // "HH:MM" in Asia/Tashkent
+  questionCount: number;
+  secondsPerQuestion: number;
+  difficulty: 'easy' | 'medium' | 'hard';
+  topicHint: string; // optional; empty = decide from the group name
+  recentTopics: string[];
+}
+
 export interface GroupPlan {
+  autoDailyMax: number; // max automatic quizzes per day (set by the Super Admin)
   aiDailyQuota: number;
   aiDailyUsed: number;
   aiDailyDate: string; // YYYY-MM-DD (Asia/Tashkent)
@@ -60,6 +96,9 @@ export interface GroupRecord {
   runningQuizId?: string;
   lastAdAt?: string;
   adLog?: string[];
+  helpers?: HelperRecord[];
+  invites?: HelperInviteRecord[];
+  auto?: AutoQuizSettings;
 }
 
 export interface QuestionRecord {
@@ -211,7 +250,13 @@ export interface PublicCertificate {
   certId: string;
 }
 
+export interface GroupAccess {
+  role: 'admin' | 'helper';
+  perms: HelperPerms;
+}
+
 export interface MeResponse {
+  access: Record<string, GroupAccess>;
   user: TgUser;
   isOwner: boolean;
   groups: GroupRecord[];

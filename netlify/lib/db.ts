@@ -42,7 +42,24 @@ export async function listKeys(prefix: string): Promise<string[]> {
 import type { GroupRecord, QuizRecord, QuizSummary, AuditLogRecord } from '../../src/types/index.ts';
 import { uid } from './config.ts';
 
-export const getGroup = (id: string) => getJSON<GroupRecord>(`g/${id}`);
+export const defaultAuto = () => ({
+  enabled: false,
+  times: [] as string[],
+  questionCount: 5,
+  secondsPerQuestion: 30,
+  difficulty: 'medium' as const,
+  topicHint: '',
+  recentTopics: [] as string[],
+});
+export function normGroup(g: GroupRecord | null): GroupRecord | null {
+  if (!g) return null;
+  g.plan.autoDailyMax ??= 2;
+  g.helpers ??= [];
+  g.invites ??= [];
+  g.auto ??= defaultAuto();
+  return g;
+}
+export const getGroup = async (id: string) => normGroup(await getJSON<GroupRecord>(`g/${id}`));
 export const saveGroup = (g: GroupRecord) => setJSON(`g/${g.id}`, g);
 export const getQuiz = (id: string) => getJSON<QuizRecord>(`q/${id}`);
 export const saveQuiz = (q: QuizRecord) => setJSON(`q/${q.id}`, q);
@@ -50,7 +67,7 @@ export const saveQuiz = (q: QuizRecord) => setJSON(`q/${q.id}`, q);
 export async function listAllGroups(): Promise<GroupRecord[]> {
   const keys = await listKeys('g/');
   const all = await Promise.all(keys.map(k => getJSON<GroupRecord>(k)));
-  return all.filter(Boolean) as GroupRecord[];
+  return all.map(normGroup).filter(Boolean) as GroupRecord[];
 }
 
 export async function groupsOfAdmin(userId: string): Promise<GroupRecord[]> {
@@ -61,6 +78,11 @@ export async function groupsOfAdmin(userId: string): Promise<GroupRecord[]> {
 export async function addGroupToAdmin(userId: string, groupId: string) {
   const ids = (await getJSON<string[]>(`ug/${userId}`)) || [];
   if (!ids.includes(groupId)) await setJSON(`ug/${userId}`, [...ids, groupId]);
+}
+
+export async function removeGroupFromUser(userId: string, groupId: string) {
+  const ids = (await getJSON<string[]>(`ug/${userId}`)) || [];
+  await setJSON(`ug/${userId}`, ids.filter(i => i !== groupId));
 }
 
 export function summarize(q: QuizRecord): QuizSummary {
@@ -91,6 +113,7 @@ export interface ActiveIndex {
   scheduled: { id: string; at: number }[];
   running: { id: string; nextAt: number }[];
   ads?: { adId: string; groupIds: string[] | 'all'; at: number }[];
+  auto?: { gid: string; at: number }[];
 }
 export async function getIndex(): Promise<ActiveIndex> {
   return (await getJSON<ActiveIndex>('idx/active')) || { scheduled: [], running: [] };

@@ -40,7 +40,7 @@ export const QuizCreatorPage: React.FC<Props> = ({ group, onDone, toast }) => {
     try {
       const r = await api.generate(group.id, { topic: topic.trim(), difficulty, questionCount: count, optionsCount });
       setQuestions(r.questions);
-      if (r.questions.length < count) toast(`AI faqat ${r.questions.length} ta sifatli savol tuza oldi. Qo'shimcha savolni qo'lda qo'shishingiz mumkin.`, false);
+      if (r.warning) toast(r.warning, false);
     } catch (e: any) {
       setError(e.message);
       haptic('error');
@@ -58,9 +58,9 @@ export const QuizCreatorPage: React.FC<Props> = ({ group, onDone, toast }) => {
       if (!p[0] || opts.length < 2 || !(correct >= 0 && correct < p.slice(1, 5).length) || !p[1 + correct]) return void bad.push(i + 1);
       // map chosen (1-based among the 4 columns) to the index in the filtered list
       const chosenText = p[1 + correct];
-      parsed.push({ id: `q-csv-${Date.now()}-${i}`, position: 0, text: p[0].slice(0, 300), options: opts.map(o => o.slice(0, 100)), correctOptionIndex: opts.indexOf(chosenText), explanation: (p[6] || '').slice(0, 200), verified: true });
+      parsed.push({ id: `q-csv-${Date.now()}-${i}`, position: 0, text: p[0].slice(0, 300), options: opts.map(o => o.slice(0, 100)), correctOptionIndex: opts.indexOf(chosenText), explanation: '', verified: true });
     });
-    if (!parsed.length) return toast("Format noto'g'ri. Namuna: Savol;A;B;C;D;1;Izoh", false);
+    if (!parsed.length) return toast("Format noto'g'ri. Namuna: Savol;A;B;C;D;1", false);
     setQuestions(renumber([...questions, ...parsed]).slice(0, 30));
     setCsvOpen(false);
     setCsv('');
@@ -149,13 +149,13 @@ export const QuizCreatorPage: React.FC<Props> = ({ group, onDone, toast }) => {
 
         </div>
         <Btn tone="primary" onClick={generate} busy={generating} disabled={inactive} className="w-full py-3.5">
-          <Sparkles className="w-4 h-4" /> {generating ? 'AI savollarni tuzmoqda...' : questions.length ? 'Qayta generatsiya qilish' : 'AI bilan savollar yaratish'}
+          <Sparkles className="w-4 h-4" /> {generating ? 'AI savollarni tuzib, tekshirmoqda...' : questions.length ? 'Qayta generatsiya qilish' : 'AI bilan savollar yaratish'}
         </Btn>
         <div className="grid grid-cols-2 gap-2">
           <Btn onClick={() => setEditing({ index: null })}><Plus className="w-3.5 h-3.5" /> Qo'lda savol</Btn>
           <Btn onClick={() => setCsvOpen(true)}><FileSpreadsheet className="w-3.5 h-3.5" /> CSV import</Btn>
         </div>
-        <p className="text-[11px] text-slate-500">Bugun AI: {group.plan.aiDailyUsed}/{group.plan.aiDailyQuota} generatsiya ishlatilgan.</p>
+        <p className="text-[11px] text-slate-500">Bugun AI: {group.plan.aiDailyUsed}/{group.plan.aiDailyQuota} generatsiya ishlatilgan. Har bir savol ikki marta mustaqil tekshiriladi, shuning uchun generatsiya 20–60 soniya olishi mumkin.</p>
       </Card>
 
       {questions.length > 0 && (
@@ -178,7 +178,6 @@ export const QuizCreatorPage: React.FC<Props> = ({ group, onDone, toast }) => {
                   </div>
                 ))}
               </div>
-              {q.explanation && <div className="text-[11px] text-sky-300 bg-sky-950/40 border border-sky-800/40 rounded-xl p-2.5">💡 {q.explanation}</div>}
             </Card>
           ))}
 
@@ -219,8 +218,8 @@ export const QuizCreatorPage: React.FC<Props> = ({ group, onDone, toast }) => {
 
       {csvOpen && (
         <Modal title="CSV orqali import" onClose={() => setCsvOpen(false)}>
-          <p className="text-xs text-slate-400">Har bir qatorda bitta savol, <code>;</code> bilan ajratilgan:<br /><code>Savol;A;B;C;D;to'g'ri_raqam(1-4);izoh</code></p>
-          <textarea rows={7} className={`${inputCls} font-mono text-xs`} value={csv} onChange={e => setCsv(e.target.value)} placeholder="She ___ to school;goes;go;went;gone;1;3-shaxs birlikda -es qo'shiladi" />
+          <p className="text-xs text-slate-400">Har bir qatorda bitta savol, <code>;</code> bilan ajratilgan:<br /><code>Savol;A;B;C;D;to'g'ri_raqam(1-4)</code></p>
+          <textarea rows={7} className={`${inputCls} font-mono text-xs`} value={csv} onChange={e => setCsv(e.target.value)} placeholder="O'zbekiston poytaxti qaysi shahar?;Toshkent;Samarqand;Buxoro;Xiva;1" />
           <div className="flex justify-end gap-2">
             <Btn onClick={() => setCsvOpen(false)}>Yopish</Btn>
             <Btn tone="success" onClick={importCsv}>Import qilish</Btn>
@@ -235,7 +234,6 @@ const QuestionEditor: React.FC<{ initial: QuestionRecord | null; onClose: () => 
   const [text, setText] = useState(initial?.text || '');
   const [opts, setOpts] = useState<string[]>([...(initial?.options || []), '', '', '', ''].slice(0, 4));
   const [correct, setCorrect] = useState(initial?.correctOptionIndex ?? 0);
-  const [expl, setExpl] = useState(initial?.explanation || '');
   const [err, setErr] = useState('');
 
   const save = () => {
@@ -245,7 +243,7 @@ const QuestionEditor: React.FC<{ initial: QuestionRecord | null; onClose: () => 
     if (new Set(filled.map(f => f.o.toLowerCase())).size !== filled.length) return setErr('Variantlar bir xil bo\'lmasligi kerak');
     const ci = filled.findIndex(f => f.i === correct);
     if (ci === -1) return setErr("To'g'ri javob bo'sh variantga belgilangan");
-    onSave({ id: `q-man-${Date.now()}`, position: 0, text: text.trim(), options: filled.map(f => f.o), correctOptionIndex: ci, explanation: expl.trim(), verified: true });
+    onSave({ id: `q-man-${Date.now()}`, position: 0, text: text.trim(), options: filled.map(f => f.o), correctOptionIndex: ci, explanation: '', verified: true });
   };
 
   return (
@@ -261,7 +259,6 @@ const QuestionEditor: React.FC<{ initial: QuestionRecord | null; onClose: () => 
           </div>
         ))}
       </div>
-      <Field label="Izoh (max 200)"><input className={inputCls} maxLength={200} value={expl} onChange={e => setExpl(e.target.value)} placeholder="Nega aynan shu javob to'g'ri?" /></Field>
       <div className="flex justify-end gap-2">
         <Btn onClick={onClose}>Bekor qilish</Btn>
         <Btn tone="primary" onClick={save}>Saqlash</Btn>

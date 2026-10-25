@@ -2,10 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Award, CalendarClock, Play, Sparkles, Square, Users } from 'lucide-react';
 import { api } from '../lib/api';
 import { confirmAction } from '../lib/tg';
-import type { BotHealth, GroupRecord, QuizSummary } from '../types';
+import type { BotHealth, GroupRecord, HelperPerms, QuizSummary } from '../types';
 import { Badge, Btn, Card, Empty, fmtDate } from '../components/ui';
 
 interface Props {
+  perms: HelperPerms;
   group: GroupRecord;
   quizzes: QuizSummary[];
   onNavigate: (tab: string) => void;
@@ -13,7 +14,7 @@ interface Props {
   toast: (m: string, ok?: boolean) => void;
 }
 
-export const DashboardPage: React.FC<Props> = ({ group, quizzes, onNavigate, onChanged, toast }) => {
+export const DashboardPage: React.FC<Props> = ({ perms, group, quizzes, onNavigate, onChanged, toast }) => {
   const [health, setHealth] = useState<BotHealth | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -67,13 +68,13 @@ export const DashboardPage: React.FC<Props> = ({ group, quizzes, onNavigate, onC
         <Card className="!border-emerald-600/50 space-y-2">
           <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" /><b className="text-sm text-emerald-300">Quiz davom etmoqda</b></div>
           <div className="text-sm text-slate-200">{runningQuiz.topic} · {runningQuiz.questionCount} ta savol</div>
-          <Btn tone="danger" busy={busy} onClick={() => stop(runningQuiz.id)}><Square className="w-3.5 h-3.5" /> To'xtatish va natijalarni e'lon qilish</Btn>
+          {perms.control && <Btn tone="danger" busy={busy} onClick={() => stop(runningQuiz.id)}><Square className="w-3.5 h-3.5" /> To'xtatish va natijalarni e'lon qilish</Btn>}
         </Card>
       )}
 
       <div className="grid grid-cols-2 gap-2.5">
-        <Btn tone="primary" onClick={() => onNavigate('new')} className="py-3.5"><Play className="w-4 h-4" /> Yangi quiz</Btn>
-        <Btn onClick={() => onNavigate('history')} className="py-3.5">Tarix va natijalar</Btn>
+        {perms.create && <Btn tone="primary" onClick={() => onNavigate('new')} className="py-3.5"><Play className="w-4 h-4" /> Yangi quiz</Btn>}
+        {(perms.create || perms.control) && <Btn onClick={() => onNavigate('history')} className="py-3.5">Tarix va natijalar</Btn>}
       </div>
 
       <Card className="space-y-1.5">

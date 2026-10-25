@@ -184,6 +184,8 @@ function Groups({ toast }: T) {
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800"><span className="text-slate-400 block text-[10px]">AI (kunlik)</span><b>{g.plan.aiDailyUsed}/{g.plan.aiDailyQuota}</b></div>
             <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800"><span className="text-slate-400 block text-[10px]">Sertifikat (oylik)</span><b>{g.plan.certMonthlyUsed}/{g.plan.certMonthlyQuota}</b></div>
+            <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800"><span className="text-slate-400 block text-[10px]">Avto-quiz (kuniga limit)</span><b>{g.plan.autoDailyMax ?? 2}</b>{g.auto?.enabled && <span className="text-[10px] text-emerald-400"> · yoqilgan ({g.auto.times.join(', ')})</span>}</div>
+            <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800"><span className="text-slate-400 block text-[10px]">Yordamchilar</span><b>{g.helpers?.length ?? 0}/10</b></div>
           </div>
           <div className="flex flex-wrap gap-2">
             <Btn onClick={() => setEdit(g)}><Sliders className="w-3.5 h-3.5" /> Limitlar</Btn>
@@ -200,27 +202,30 @@ function Groups({ toast }: T) {
 function LimitsModal({ group, onClose, onSaved, toast }: { group: GroupRecord; onClose: () => void; onSaved: (g: GroupRecord) => void; toast: T['toast'] }) {
   const [ai, setAi] = useState(group.plan.aiDailyQuota);
   const [cert, setCert] = useState(group.plan.certMonthlyQuota);
-  const [adMin, setAdMin] = useState(group.plan.adMinPerWeek);
-  const [adMax, setAdMax] = useState(group.plan.adMaxPerWeek);
-  const [adFree, setAdFree] = useState(group.settings.adFree);
+  const [autoMax, setAutoMax] = useState(group.plan.autoDailyMax ?? 2);
   const save = async () => {
     try {
-      await api.ownerLimits(group.id, { aiDailyQuota: ai, certMonthlyQuota: cert, adMinPerWeek: adMin, adMaxPerWeek: adMax, adFree });
-      onSaved({ ...group, plan: { ...group.plan, aiDailyQuota: ai, certMonthlyQuota: cert, adMinPerWeek: adMin, adMaxPerWeek: Math.max(adMin, adMax) }, settings: { ...group.settings, adFree } });
+      await api.ownerLimits(group.id, { aiDailyQuota: ai, certMonthlyQuota: cert, autoDailyMax: autoMax });
+      const times = (group.auto?.times || []).slice(0, autoMax);
+      onSaved({
+        ...group,
+        plan: { ...group.plan, aiDailyQuota: ai, certMonthlyQuota: cert, autoDailyMax: autoMax },
+        auto: group.auto ? { ...group.auto, times, enabled: group.auto.enabled && autoMax > 0 && times.length > 0 } : group.auto,
+      });
     } catch (e: any) {
       toast(e.message, false);
     }
   };
-  const n = (v: number, set: (x: number) => void) => <input type="number" min={0} className={inputCls} value={v} onChange={e => set(Number(e.target.value))} />;
+  const n = (v: number, set: (x: number) => void, max?: number) => <input type="number" min={0} max={max} className={inputCls} value={v} onChange={e => set(Number(e.target.value))} />;
   return (
     <Modal title={`Limitlar: ${group.title}`} onClose={onClose}>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="AI (kunlik)">{n(ai, setAi)}</Field>
+        <Field label="AI generatsiya (kunlik)">{n(ai, setAi)}</Field>
         <Field label="Sertifikat (oylik)">{n(cert, setCert)}</Field>
-        <Field label="Reklama min/hafta">{n(adMin, setAdMin)}</Field>
-        <Field label="Reklama max/hafta">{n(adMax, setAdMax)}</Field>
+        <div className="col-span-2">
+          <Field label="Avtomatik quiz (kuniga, 0–10)" hint="0 = admin avtomatik quizni yoqa olmaydi. Kamaytirsangiz, admin vaqtlari ham qisqartiriladi.">{n(autoMax, setAutoMax, 10)}</Field>
+        </div>
       </div>
-      <label className="flex items-center gap-2 text-sm text-slate-200"><input type="checkbox" checked={adFree} onChange={e => setAdFree(e.target.checked)} className="accent-sky-500 w-4 h-4" /> Reklamasiz tarif</label>
       <div className="flex justify-end gap-2"><Btn onClick={onClose}>Bekor</Btn><Btn tone="primary" onClick={save}>Saqlash</Btn></div>
     </Modal>
   );
@@ -233,7 +238,6 @@ function Codes({ toast }: T) {
   const [title, setTitle] = useState('');
   const [ai, setAi] = useState(20);
   const [cert, setCert] = useState(200);
-  const [adMin, setAdMin] = useState(2);
   const [created, setCreated] = useState('');
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -245,7 +249,7 @@ function Codes({ toast }: T) {
     if (!title.trim()) return toast('Guruh nomini kiriting', false);
     setBusy(true);
     try {
-      const r = await api.ownerCreateCode({ groupTitle: title.trim(), aiDailyQuota: ai, certMonthlyQuota: cert, adMinPerWeek: adMin });
+      const r = await api.ownerCreateCode({ groupTitle: title.trim(), aiDailyQuota: ai, certMonthlyQuota: cert });
       setCreated(r.code);
       setData([r.codeRecord, ...codes]);
       setTitle('');
@@ -294,10 +298,9 @@ function Codes({ toast }: T) {
           ) : (
             <>
               <Field label="Guruh nomi (eslatma uchun)"><input className={inputCls} value={title} onChange={e => setTitle(e.target.value)} maxLength={80} /></Field>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <Field label="AI/kun"><input type="number" min={0} className={inputCls} value={ai} onChange={e => setAi(Number(e.target.value))} /></Field>
                 <Field label="Sertifikat/oy"><input type="number" min={0} className={inputCls} value={cert} onChange={e => setCert(Number(e.target.value))} /></Field>
-                <Field label="Reklama/hafta"><input type="number" min={0} className={inputCls} value={adMin} onChange={e => setAdMin(Number(e.target.value))} /></Field>
               </div>
               <Btn tone="primary" busy={busy} onClick={create} className="w-full">Kod yaratish</Btn>
             </>

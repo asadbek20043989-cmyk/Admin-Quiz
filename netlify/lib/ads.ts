@@ -12,32 +12,6 @@ export async function siteUrl(): Promise<string> {
   return ((await getText('cfg/site')) || '').replace(/\/$/, '');
 }
 
-// Posts at most one clearly-labelled partner ad, honoring the group's weekly frequency.
-export async function maybePostAd(g: GroupRecord): Promise<boolean> {
-  if (g.settings.adFree) return false;
-  const weekAgo = Date.now() - 7 * 86400 * 1000;
-  const log = (g.adLog || []).filter(t => new Date(t).getTime() > weekAgo);
-  const freq = Math.min(Math.max(g.settings.adFrequencyPerWeek, g.plan.adMinPerWeek), g.plan.adMaxPerWeek);
-  if (log.length >= freq) return false;
-  if (g.lastAdAt && Date.now() - new Date(g.lastAdAt).getTime() < 20 * 3600 * 1000) return false;
-
-  const ads = await getAds();
-  const cands = ads
-    .filter(a => a.status === 'active' && (a.targetGroupIds.length === 0 || a.targetGroupIds.includes(g.id)))
-    .sort((a, b) => a.impressions - b.impressions);
-  const ad = cands[0];
-  if (!ad) return false;
-
-  const ok = await postAd(ad, g);
-  if (!ok) return false;
-
-  ad.impressions += 1;
-  await saveAds(ads);
-  g.adLog = [...log, new Date().toISOString()];
-  g.lastAdAt = new Date().toISOString();
-  return true;
-}
-
 // Sends exactly the ad text (optionally with a photo and a button) - no labels or extra wording.
 export async function postAd(ad: AdRecord, g: GroupRecord): Promise<boolean> {
   const text = esc(ad.text);
