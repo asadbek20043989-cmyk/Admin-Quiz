@@ -40,7 +40,7 @@ export async function startQuiz(quizId: string): Promise<{ ok: boolean; error?: 
   const n = quiz.questions.length;
   const intro =
     `🎯 <b>Viktorina boshlanmoqda!</b>\n\n📚 Mavzu: <b>${esc(quiz.topic)}</b>\n❓ Savollar: <b>${n} ta</b>\n⏱ Har bir savolga: <b>${quiz.secondsPerQuestion} soniya</b>\n` +
-    `🏆 G'oliblar: <b>Top-${quiz.winnersCount}</b> (sertifikat)\n\nHar bir to'g'ri javob +1 ball, tezroq javob qo'shimcha ball beradi. Omad!`;
+    `🏆 G'oliblar: <b>Top-${quiz.winnersCount}</b> (sertifikat)\n\nHar bir to'g'ri javob +1 ball. Omad!`;
   const a = await sendMessage(g.tgChatId, intro);
   if (!a.ok) return { ok: false, error: `Guruhga yuborib bo'lmadi: ${a.description || 'bot guruhda admin emas'}` };
 
@@ -185,7 +185,7 @@ export async function finalizeQuiz(quizId: string) {
   const keys = await listKeys(prefix);
   const period = clamp(quiz.secondsPerQuestion, 5, 600) * 1000;
 
-  interface Acc { correct: number; bonus: number; time: number; answered: Set<number> }
+  interface Acc { correct: number; time: number; answered: Set<number> }
   const users = new Map<string, Acc>();
   const perQ = quiz.questions.map(() => ({ answered: 0, wrong: 0 }));
   for (const key of keys) {
@@ -194,7 +194,7 @@ export async function finalizeQuiz(quizId: string) {
     const q = quiz.questions[idx];
     const sent = quiz.qSentAt?.[idx];
     if (!q || !sent) continue;
-    const acc = users.get(uid) || { correct: 0, bonus: 0, time: 0, answered: new Set<number>() };
+    const acc = users.get(uid) || { correct: 0, time: 0, answered: new Set<number>() };
     if (acc.answered.has(idx)) continue; // only the first answer counts
     const rt = parseInt(ts36, 36) - sent;
     if (rt > period + 4000) continue; // late answer
@@ -202,16 +202,16 @@ export async function finalizeQuiz(quizId: string) {
     acc.answered.add(idx);
     acc.time += t;
     perQ[idx].answered++;
-    if (Number(chosenS) === q.correctOptionIndex) {
-      acc.correct++;
-      acc.bonus += 0.5 * (1 - t / period);
-    } else perQ[idx].wrong++;
+    // Har bir to'g'ri javob = aynan +1 ball. Tezlik ball bermaydi.
+    if (Number(chosenS) === q.correctOptionIndex) acc.correct++;
+    else perQ[idx].wrong++;
     users.set(uid, acc);
   }
 
   const ranked = [...users.entries()]
-    .map(([userId, a]) => ({ userId, correct: a.correct, score: Math.round((a.correct + a.bonus) * 100) / 100, time: a.time }))
-    .sort((x, y) => y.score - x.score || y.correct - x.correct || x.time - y.time);
+    .map(([userId, a]) => ({ userId, correct: a.correct, score: a.correct, time: a.time }))
+    // Ball teng bo'lsa, faqat o'rinlarni ajratish uchun umumiy sarflangan vaqt hisobga olinadi (ball qo'shilmaydi).
+    .sort((x, y) => y.score - x.score || x.time - y.time);
 
   const top = ranked.slice(0, 30);
   const names = await Promise.all(top.map(r => getJSON<{ n: string; u?: string }>(`un/${quiz.id}/${r.userId}`)));

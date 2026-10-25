@@ -28,9 +28,10 @@ export const SettingsPage: React.FC<Props> = props => {
   if (!current) return <Empty text="Sizda sozlamalarga ruxsat yo'q." />;
   return (
     <div className="space-y-4">
-      <div className="flex gap-1 bg-slate-900 border border-slate-800 p-1 rounded-xl overflow-x-auto scrollbar-none">
+      {/* Barcha bo'limlar doim ko'rinadi (qatorga sig'masa pastga tushadi), yashirin aylantirish yo'q */}
+      <div className="flex flex-wrap gap-1 bg-slate-900 border border-slate-800 p-1 rounded-xl">
         {tabs.map(([id, label]) => (
-          <button key={id} onClick={() => setSub(id)} className={`flex-1 whitespace-nowrap px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer ${current === id ? 'bg-sky-500 text-white' : 'text-slate-400'}`}>{label}</button>
+          <button key={id} onClick={() => setSub(id)} className={`flex-1 basis-[30%] whitespace-nowrap px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer ${current === id ? 'bg-sky-500 text-white' : 'text-slate-400'}`}>{label}</button>
         ))}
       </div>
       {current === 'group' && <GroupTab {...props} />}
