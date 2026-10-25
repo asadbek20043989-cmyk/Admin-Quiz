@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomInt } from 'node:crypto';
 import type { AdminCodeRecord, ModerationLog } from '../../src/types/index.ts';
 import { CODE_PEPPER, esc, isOwnerId, SUPER_ADMIN_IDS, uid } from './config.ts';
 import { addGroupToAdmin, audit, del, getGroup, getJSON, groupsOfAdmin, saveGroup, setJSON, setText } from './db.ts';
@@ -10,6 +10,56 @@ import { siteUrl } from './ads.ts';
 import { displayName } from './auth.ts';
 
 export const hashCode = (code: string) => createHash('sha256').update(CODE_PEPPER() + code.trim().toUpperCase()).digest('hex');
+
+// ---- Self-service link codes: the bot gives them to anyone who asks in a private chat.
+// A code is bound to the Telegram user it was issued to and is valid for 1 hour.
+// (Codes made by the Super Admin in the owner panel still work: 48 hours, not bound to a user.)
+const SELF_CODE_TTL_MS = 60 * 60 * 1000;
+const SELF_DEFAULT_PLAN = { aiDailyQuota: 20, certMonthlyQuota: 200, adMinPerWeek: 2 };
+interface SelfCode { userId: string; name: string; createdAt: string; expiresAt: string }
+
+function genLinkCode() {
+  const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const pick = (n: number) => Array.from({ length: n }, () => alphabet[randomInt(alphabet.length)]).join('');
+  return `QZ-${pick(4)}-${pick(4)}`;
+}
+
+async function issueSelfCode(from: any, chatId: number | string) {
+  if (process.env.SELF_LINK_DISABLED === '1') {
+    return sendMessage(chatId, "Hozir kodni o'zingiz ololmaysiz. Iltimos, Super Admindan <b>ulanish kodini</b> so'rang.");
+  }
+  const userId = String(from.id);
+  // Issue limit: 5 codes per user per hour (prevents spamming the storage).
+  const rlKey = `sci/${userId}`;
+  const rl = (await getJSON<{ n: number; at: number }>(rlKey)) || { n: 0, at: Date.now() };
+  if (Date.now() - rl.at > 3600 * 1000) { rl.n = 0; rl.at = Date.now(); }
+  if (rl.n >= 5) return sendMessage(chatId, "Juda ko'p kod so'radingiz. Bir soatdan keyin qayta urinib ko'ring yoki Super Admindan kod so'rang.");
+  rl.n++;
+  await setJSON(rlKey, rl);
+
+  // Only one active code per user: the previous one stops working.
+  const prev = await getJSON<{ hash: string }>(`scodeuser/${userId}`);
+  if (prev?.hash) await del(`scode/${prev.hash}`);
+
+  const code = genLinkCode();
+  const hash = hashCode(code);
+  const now = Date.now();
+  const rec: SelfCode = { userId, name: displayName(from), createdAt: new Date(now).toISOString(), expiresAt: new Date(now + SELF_CODE_TTL_MS).toISOString() };
+  await setJSON(`scode/${hash}`, rec);
+  await setJSON(`scodeuser/${userId}`, { hash });
+  await audit(rec.name, 'KOD_OLINDI', `${rec.name} o'ziga ulanish kodi oldi (1 soat)`);
+
+  let uname = '';
+  try { uname = await botUsername(); } catch { /* optional */ }
+  return sendMessage(
+    chatId,
+    `🔑 <b>Ulanish kodingiz:</b>\n\n<code>${code}</code>\n\n⏱ Kod <b>1 soat</b> amal qiladi va faqat <b>siz</b> uchun, bir marta ishlaydi.\n\n` +
+      `1) ${uname ? '@' + esc(uname) : 'Botni'} guruhingizga qo'shing va <b>admin</b> qiling (xabarlarni o'chirish, a'zolarni cheklash, taklif qilish huquqlari bilan).\n` +
+      `2) Guruhda yozing: <code>/link ${code}</code>\n` +
+      `3) Shundan so'ng bu yerda /panel yozing — admin paneli ochiladi.\n\n` +
+      `Muddati o'tsa, yangi kod olish uchun yana /connect yozing.`
+  );
+}
 
 // Plain group messages are the highest-volume event, so group settings are cached in memory
 // (per warm function instance) for 60 seconds to avoid a blob read on every message.
@@ -94,9 +144,11 @@ async function onPrivateCommand(m: any, text: string) {
     return openPanelButton(chatId, '🛡 <b>Super Admin paneli</b>', '/owner.html', '🛡 Super Admin panelini ochish');
   }
 
+  if (cmd === '/connect' || cmd === '/kod' || cmd === '/code') return issueSelfCode(from, chatId);
+
   if (cmd === '/panel' || cmd === '/admin') {
     const groups = await groupsOfAdmin(String(from.id));
-    if (!groups.length) return sendMessage(chatId, "Sizda hali ulangan guruh yo'q. Super Admindan ulanish kodini oling, botni guruhingizga admin qiling va guruhda <code>/link KOD</code> yuboring.");
+    if (!groups.length) return sendMessage(chatId, "Sizda hali ulangan guruh yo'q. Kod olish uchun /connect yozing (yoki Super Admindan so'rang), botni guruhingizga admin qiling va guruhda <code>/link KOD</code> yuboring.");
     return openPanelButton(chatId, '📱 <b>Admin paneli</b>', '/', '📱 Panelni ochish');
   }
 
@@ -122,7 +174,7 @@ async function onPrivateCommand(m: any, text: string) {
     const owner = isOwnerId(from.id);
     let txt = `👋 Assalomu alaykum, <b>${esc(displayName(from))}</b>!\nMen guruhlar uchun istalgan fandan AI viktorina tuzib beruvchi botman.`;
     if (groups.length) return openPanelButton(chatId, txt + '\n\nBoshqaruv paneli quyida:', '/', '📱 Panelni ochish');
-    txt += "\n\nGuruhingizni ulash uchun Super Admindan <b>ulanish kodi</b> oling, botni guruhga admin qiling va guruhda <code>/link KOD</code> yuboring.";
+    txt += "\n\nGuruhingizni ulash uchun /connect yozing — bot sizga <b>1 soat</b> amal qiladigan ulanish kodini beradi (yoki kodni Super Admindan so'rang). So'ng botni guruhga admin qiling va guruhda <code>/link KOD</code> yuboring.";
     if (owner) txt += '\n\nSuper Admin paneli: /owner';
     return sendMessage(chatId, txt);
   }
@@ -171,9 +223,23 @@ async function onLink(m: any, codeArg: string) {
     return reply(t);
   };
 
+  const hash = hashCode(code);
+  const selfRec = await getJSON<SelfCode>(`scode/${hash}`);
   const codes = (await getJSON<(AdminCodeRecord & { hash: string })[]>('codes')) || [];
-  const rec = codes.find(c => c.hash === hashCode(code));
-  if (!rec || rec.revoked || rec.used || new Date(rec.expiresAt).getTime() < Date.now()) return fail("❌ Kod noto'g'ri, muddati o'tgan yoki ishlatilgan.");
+  let rec: { groupTitle: string; plan: AdminCodeRecord['plan'] } & Partial<AdminCodeRecord>;
+  let ownerCode: (AdminCodeRecord & { hash: string }) | undefined;
+  if (selfRec) {
+    if (new Date(selfRec.expiresAt).getTime() < Date.now()) {
+      await del(`scode/${hash}`);
+      return fail("❌ Kod muddati o'tgan (1 soat). Botga shaxsiy chatda /connect yozib yangi kod oling.");
+    }
+    if (selfRec.userId !== String(from.id)) return fail("❌ Bu kod boshqa foydalanuvchiga berilgan. O'zingiz uchun botda /connect yozib kod oling.");
+    rec = { groupTitle: chat.title || 'Guruh', plan: SELF_DEFAULT_PLAN };
+  } else {
+    ownerCode = codes.find(c => c.hash === hash);
+    if (!ownerCode || ownerCode.revoked || ownerCode.used || new Date(ownerCode.expiresAt).getTime() < Date.now()) return fail("❌ Kod noto'g'ri, muddati o'tgan yoki ishlatilgan.");
+    rec = ownerCode;
+  }
 
   if (!(await isChatAdmin(chat.id, from.id))) return fail("❌ Faqat guruh admini (yoki egasi) guruhni ulay oladi.");
   const meId = await botId();
@@ -195,10 +261,15 @@ async function onLink(m: any, codeArg: string) {
   });
   await saveGroup(group);
   await addGroupToAdmin(String(from.id), group.id);
-  rec.used = true;
-  rec.usedBy = displayName(from);
-  rec.usedAt = new Date().toISOString();
-  await setJSON('codes', codes);
+  if (selfRec) {
+    await del(`scode/${hash}`);
+    await del(`scodeuser/${from.id}`);
+  } else if (ownerCode) {
+    ownerCode.used = true;
+    ownerCode.usedBy = displayName(from);
+    ownerCode.usedAt = new Date().toISOString();
+    await setJSON('codes', codes);
+  }
   await audit(displayName(from), 'GURUH_ULANDI', `«${group.title}» guruhi ulandi`, group.id);
 
   await reply("✅ Guruh muvaffaqiyatli ulandi! Boshqaruv paneli uchun botga shaxsiy chatda /panel yozing.");
@@ -348,6 +419,7 @@ export async function setupBot(origin: string, secret: string) {
   await tg('setMyCommands', {
     commands: [
       { command: 'start', description: 'Botni boshlash' },
+      { command: 'connect', description: 'Guruhni ulash uchun kod olish (1 soat)' },
       { command: 'panel', description: 'Admin panelini ochish' },
       { command: 'explain', description: 'Savol yoki matnni tushuntirish' },
     ],

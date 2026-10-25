@@ -164,12 +164,12 @@ function Onboarding({ botUsername }: { botUsername: string }) {
         <h1 className="text-lg font-extrabold text-white">Guruhingizni ulang</h1>
         <p className="text-sm text-slate-400">Sizda hali ulangan guruh yo'q. Ulash uchun:</p>
         <ol className="text-sm text-slate-300 space-y-2 list-decimal list-inside">
-          <li>Super Admindan <b>ulanish kodini</b> oling (<code>QZ-XXXX-XXXX</code>).</li>
+          <li>Botga shaxsiy chatda <code>/connect</code> yozing — bot sizga <b>ulanish kodini</b> beradi (<code>QZ-XXXX-XXXX</code>). Yoki kodni Super Admindan so'rang.</li>
           <li>{botUsername ? <b>@{botUsername}</b> : 'Botni'} guruhingizga qo'shing va <b>admin</b> qiling (xabarlarni o'chirish, a'zolarni cheklash, taklif qilish huquqlari bilan).</li>
           <li>Guruhda yozing: <code>/link QZ-XXXX-XXXX</code></li>
           <li>Botga shaxsiy chatda <code>/panel</code> yozing — panel ochiladi.</li>
         </ol>
-        <p className="text-[11px] text-slate-500">Kod 48 soat amal qiladi va faqat bir marta ishlatiladi. Faqat guruh admini ulay oladi.</p>
+        <p className="text-[11px] text-slate-500">/connect orqali olingan kod 1 soat amal qiladi, faqat sizga tegishli va bir marta ishlatiladi (Super Admin bergan kod 48 soat). Faqat guruh admini ulay oladi.</p>
       </div>
     </div>
   );

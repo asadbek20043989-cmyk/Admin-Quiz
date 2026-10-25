@@ -30,8 +30,10 @@ Admin oynasida Super Admin tugmasi **yo'q**, Admin bundle'ida Super Admin kodi h
 2. **Umumiy** bo'limida **🔌 Botni ulash (webhook)** tugmasini bosing. Hamma "Tizim holati" qatorlari yashil bo'lishi kerak.
 
 ## 4. Guruhni ulash
-1. Super Admin paneli → **Kodlar → Yangi ulanish kodi** (kod faqat bir marta ko'rsatiladi, 48 soat amal qiladi).
-2. Kodni guruh adminiga yuboring. Admin botni guruhga qo'shib **admin** qiladi (xabarlarni o'chirish, a'zolarni cheklash, taklif qilish huquqlari bilan).
+1. **Kodni o'zi oladi:** guruh admini botga shaxsiy chatda `/connect` yozadi — bot unga ulanish kodini beradi (**1 soat** amal qiladi, faqat o'sha foydalanuvchiga tegishli, bir marta ishlaydi, standart tarif: AI 20/kun, sertifikat 200/oy).
+   **Yoki Super Admindan so'raydi:** Super Admin paneli → **Kodlar → Yangi ulanish kodi** (kod faqat bir marta ko'rsatiladi, 48 soat amal qiladi, tarifni o'zingiz belgilaysiz).
+   Kod o'zi olishni o'chirish uchun Netlify env: `SELF_LINK_DISABLED=1`.
+2. Kodni (agar Super Admin bergan bo'lsa) guruh adminiga yuboring. Admin botni guruhga qo'shib **admin** qiladi (xabarlarni o'chirish, a'zolarni cheklash, taklif qilish huquqlari bilan).
 3. Admin guruhda yozadi: `/link QZ-XXXX-XXXX`. Faqat guruhning haqiqiy admini ulay oladi.
 4. Admin botga `/panel` yozadi → panel ochiladi.
 
